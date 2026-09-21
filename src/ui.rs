@@ -10,6 +10,7 @@ use ratatui_image::StatefulImage;
 use crate::app::{App, Mode, TextInputKind};
 use crate::entry::{Entry, Status};
 use crate::keybindings::{key_label, Keybindings};
+use crate::settings::CoverSource;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [main_area, footer_area] =
@@ -27,6 +28,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Mode::ConfirmDelete => draw_confirm_delete(frame, app),
         Mode::AwaitingRating => draw_rating_popup(frame, app),
         Mode::TextInput(kind) => draw_text_input_popup(frame, app, kind),
+        Mode::SetupChooseSource => draw_setup_choose_source(frame),
+        Mode::EnterApiKey { source, .. } => draw_enter_api_key(frame, app, source),
+        Mode::CoverFetchChoice { tried, .. } => draw_cover_fetch_choice(frame, &tried),
         Mode::Normal | Mode::EditingNotes => {}
     }
 }
@@ -230,6 +234,21 @@ fn footer_hints(mode: &Mode, kb: &Keybindings) -> Vec<(String, &'static str)> {
                 ("Esc".to_string(), "Cancel"),
             ]
         }
+        Mode::SetupChooseSource => vec![
+            ("1".to_string(), "SteamGridDB"),
+            ("2".to_string(), "RAWG.io"),
+            ("3".to_string(), "Manual"),
+        ],
+        Mode::EnterApiKey { .. } => vec![
+            ("Enter".to_string(), "Save Key"),
+            ("Esc".to_string(), "Back"),
+        ],
+        Mode::CoverFetchChoice { .. } => vec![
+            ("1".to_string(), "SteamGridDB"),
+            ("2".to_string(), "RAWG.io"),
+            ("m".to_string(), "Manual"),
+            ("s/Esc".to_string(), "Skip"),
+        ],
     }
 }
 
@@ -330,4 +349,77 @@ fn draw_text_input_popup(frame: &mut Frame, app: &App, kind: TextInputKind) {
         input_area.x + app.input_buffer.chars().count() as u16,
         input_area.y,
     ));
+}
+
+fn draw_setup_choose_source(frame: &mut Frame) {
+    let lines = vec![
+        Line::from("Welcome to gamelog!"),
+        Line::from("Choose a default source for cover art:"),
+        Line::from(""),
+        Line::from("1: SteamGridDB (best cover/box art quality)"),
+        Line::from("2: RAWG.io (broader metadata, banner-style art)"),
+        Line::from("3: Manual (you supply your own image files)"),
+        Line::from(""),
+        Line::from("Online sources need a free API key, entered next."),
+    ];
+    draw_popup(frame, " Welcome ", lines, frame.area());
+}
+
+fn draw_enter_api_key(frame: &mut Frame, app: &App, source: CoverSource) {
+    let popup_area = centered_rect(60, 35, frame.area());
+    frame.render_widget(Clear, popup_area);
+    let title = format!(" {} API Key ", source.label());
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let [prompt_area, input_area, hint_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(2),
+    ])
+    .areas(inner);
+
+    frame.render_widget(
+        Paragraph::new(format!("Enter your {} API key:", source.label())),
+        prompt_area,
+    );
+
+    // Masked so the key isn't left readable on screen.
+    let masked: String = "*".repeat(app.input_buffer.chars().count());
+    frame.render_widget(Paragraph::new(masked), input_area);
+    frame.set_cursor_position((
+        input_area.x + app.input_buffer.chars().count() as u16,
+        input_area.y,
+    ));
+
+    let hint = match source {
+        CoverSource::SteamGridDb => "Get a free key at steamgriddb.com/profile/preferences/api",
+        CoverSource::Rawg => "Get a free key at rawg.io/apidocs",
+        CoverSource::Manual => "",
+    };
+    frame.render_widget(
+        Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
+        hint_area,
+    );
+}
+
+fn draw_cover_fetch_choice(frame: &mut Frame, tried: &[CoverSource]) {
+    let tried_label = tried
+        .iter()
+        .map(|s| s.label())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let lines = vec![
+        Line::from(format!("Couldn't get cover art from: {tried_label}")),
+        Line::from(""),
+        Line::from("1: Try SteamGridDB"),
+        Line::from("2: Try RAWG.io"),
+        Line::from("m: Import a local image file"),
+        Line::from("s: Skip (no cover art)"),
+    ];
+    draw_popup(frame, " Cover Art Not Found ", lines, frame.area());
 }

@@ -7,8 +7,10 @@ use ratatui::widgets::ListState;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use uuid::Uuid;
 
+use crate::cover_fetch;
 use crate::entry::{Entry, Rating};
 use crate::keybindings::Keybindings;
+use crate::settings::{CoverSource, Settings};
 use crate::storage::Library;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +72,23 @@ pub enum Mode {
     ConfirmDelete,
     AwaitingRating,
     TextInput(TextInputKind),
+    /// First-run wizard: choose a default cover art source.
+    SetupChooseSource,
+    /// Prompting for an API key. `entry_id: None` means this is part of the
+    /// first-run wizard; `Some(id)` means it's a mid-fallback retry for a
+    /// specific entry, and `tried` carries forward the sources already
+    /// attempted for that entry so Esc can restore `CoverFetchChoice`.
+    EnterApiKey {
+        source: CoverSource,
+        entry_id: Option<Uuid>,
+        tried: Vec<CoverSource>,
+    },
+    /// Shown after an automatic cover art fetch fails, offering the user an
+    /// alternative source, manual import, or no cover art at all.
+    CoverFetchChoice {
+        entry_id: Uuid,
+        tried: Vec<CoverSource>,
+    },
 }
 
 pub struct App {
@@ -81,13 +100,18 @@ pub struct App {
     pub status_message: Option<String>,
     pub picker: Picker,
     pub keybindings: Keybindings,
+    pub settings: Settings,
     pub should_quit: bool,
+    /// Set right after creating an entry when it should be auto-fetched;
+    /// drained by the event loop between draws so a "Fetching..." message
+    /// is visible before the blocking network call runs.
+    pub pending_cover_fetch: Option<(Uuid, CoverSource)>,
     pending_new_title: Option<String>,
     image_cache: HashMap<Uuid, Option<StatefulProtocol>>,
 }
 
 impl App {
-    pub fn new(library: Library, picker: Picker, keybindings: Keybindings) -> Self {
+    pub fn new(library: Library, picker: Picker, keybindings: Keybindings, settings: Settings) -> Self {
         let mut app = Self {
             library,
             filter: Filter::All,
@@ -97,7 +121,9 @@ impl App {
             status_message: None,
             picker,
             keybindings,
+            settings,
             should_quit: false,
+            pending_cover_fetch: None,
             pending_new_title: None,
             image_cache: HashMap::new(),
         };
@@ -276,8 +302,25 @@ impl App {
         self.library.add(entry);
         self.library.save()?;
         self.input_buffer.clear();
-        self.mode = Mode::Normal;
         self.select_by_id(id);
+
+        match self.settings.default_cover_source {
+            CoverSource::Manual => {
+                self.mode = Mode::Normal;
+            }
+            source => {
+                if self.settings.api_key_for(source).is_some() {
+                    self.pending_cover_fetch = Some((id, source));
+                    self.status_message = Some(format!("Fetching cover art from {}...", source.label()));
+                    self.mode = Mode::Normal;
+                } else {
+                    // Shouldn't normally happen, since choosing an online
+                    // default requires providing a key, but handle it
+                    // gracefully rather than silently doing nothing.
+                    self.mode = Mode::CoverFetchChoice { entry_id: id, tried: Vec::new() };
+                }
+            }
+        }
         Ok(())
     }
 
@@ -500,6 +543,137 @@ impl App {
     /// and returns to normal browsing.
     pub fn cancel_input(&mut self) {
         self.cancel_to_normal();
+    }
+
+    // --- First-run setup wizard ---
+
+    pub fn choose_setup_source(&mut self, source: CoverSource) {
+        if source.needs_api_key() && self.settings.api_key_for(source).is_none() {
+            self.mode = Mode::EnterApiKey {
+                source,
+                entry_id: None,
+                tried: Vec::new(),
+            };
+        } else {
+            self.finish_setup(source);
+        }
+    }
+
+    fn finish_setup(&mut self, source: CoverSource) {
+        self.settings.default_cover_source = source;
+        match self.settings.save() {
+            Ok(()) => {
+                self.status_message =
+                    Some(format!("Default cover art source set to {}.", source.label()));
+            }
+            Err(err) => {
+                self.status_message = Some(format!("Failed to save settings: {err}"));
+            }
+        }
+        self.mode = Mode::Normal;
+    }
+
+    // --- API key entry (first run, or mid-fallback retry) ---
+
+    pub fn submit_api_key(&mut self) -> Result<()> {
+        let key = self.input_buffer.trim().to_string();
+        if key.is_empty() {
+            self.status_message = Some("API key cannot be empty.".to_string());
+            return Ok(());
+        }
+        let Mode::EnterApiKey { source, entry_id, .. } = self.mode.clone() else {
+            return Ok(());
+        };
+        self.settings.set_api_key(source, key);
+        self.input_buffer.clear();
+
+        match entry_id {
+            None => self.finish_setup(source),
+            Some(id) => {
+                self.settings.save()?;
+                self.pending_cover_fetch = Some((id, source));
+                self.status_message = Some(format!("Fetching cover art from {}...", source.label()));
+                self.mode = Mode::Normal;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn cancel_api_key_entry(&mut self) {
+        if let Mode::EnterApiKey { entry_id, tried, .. } = self.mode.clone() {
+            self.input_buffer.clear();
+            self.mode = match entry_id {
+                None => Mode::SetupChooseSource,
+                Some(id) => Mode::CoverFetchChoice { entry_id: id, tried },
+            };
+        }
+    }
+
+    // --- Automatic cover art fetch ---
+
+    /// Performs the network fetch set up by `pending_cover_fetch`. Called
+    /// from the event loop between draws, so a "Fetching..." status message
+    /// is visible on screen before this blocking call runs.
+    pub fn run_pending_cover_fetch(&mut self) -> Result<()> {
+        let Some((entry_id, source)) = self.pending_cover_fetch.take() else {
+            return Ok(());
+        };
+        let Some(entry) = self.library.get(entry_id) else {
+            return Ok(());
+        };
+        let title = entry.title.clone();
+        let Some(api_key) = self.settings.api_key_for(source).map(str::to_string) else {
+            self.mode = Mode::CoverFetchChoice { entry_id, tried: vec![source] };
+            return Ok(());
+        };
+
+        match cover_fetch::fetch_cover(source, &api_key, &title) {
+            Ok(Some((bytes, extension))) => {
+                let relative = self.library.import_cover_art_bytes(entry_id, &bytes, &extension)?;
+                if let Some(entry) = self.library.get_mut(entry_id) {
+                    entry.cover_art = Some(relative);
+                }
+                self.image_cache.remove(&entry_id);
+                self.library.save()?;
+                self.status_message = Some(format!("Cover art added from {}.", source.label()));
+            }
+            Ok(None) => {
+                self.status_message = Some(format!("No results from {}.", source.label()));
+                self.mode = Mode::CoverFetchChoice { entry_id, tried: vec![source] };
+            }
+            Err(err) => {
+                self.status_message = Some(format!("{} request failed: {err}", source.label()));
+                self.mode = Mode::CoverFetchChoice { entry_id, tried: vec![source] };
+            }
+        }
+        Ok(())
+    }
+
+    /// Attempts (or retries) fetching cover art for `entry_id` from
+    /// `source`, prompting for an API key first if one isn't configured yet.
+    pub fn choose_fallback_source(&mut self, entry_id: Uuid, tried: Vec<CoverSource>, source: CoverSource) {
+        if self.settings.api_key_for(source).is_some() {
+            self.pending_cover_fetch = Some((entry_id, source));
+            self.status_message = Some(format!("Fetching cover art from {}...", source.label()));
+            self.mode = Mode::Normal;
+        } else {
+            self.mode = Mode::EnterApiKey {
+                source,
+                entry_id: Some(entry_id),
+                tried,
+            };
+        }
+    }
+
+    pub fn choose_manual_cover(&mut self, entry_id: Uuid) {
+        self.select_by_id(entry_id);
+        self.input_buffer.clear();
+        self.mode = Mode::TextInput(TextInputKind::ImportCoverArt);
+    }
+
+    pub fn skip_cover(&mut self) {
+        self.status_message = Some("No cover art added.".to_string());
+        self.mode = Mode::Normal;
     }
 
     /// Returns the decoded, protocol-encoded cover art for `entry`, loading

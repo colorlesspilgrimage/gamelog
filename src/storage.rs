@@ -119,6 +119,22 @@ impl Library {
         Ok(PathBuf::from("covers").join(file_name))
     }
 
+    /// Writes downloaded image bytes into the app's data directory as
+    /// `entry_id`'s cover art, returning a path relative to the data
+    /// directory to store on `Entry::cover_art`.
+    pub fn import_cover_art_bytes(
+        &self,
+        entry_id: Uuid,
+        bytes: &[u8],
+        extension: &str,
+    ) -> Result<PathBuf> {
+        let file_name = format!("{entry_id}.{extension}");
+        let dest = Self::covers_dir(&self.data_dir).join(&file_name);
+        fs::write(&dest, bytes)
+            .with_context(|| format!("writing downloaded cover art to {}", dest.display()))?;
+        Ok(PathBuf::from("covers").join(file_name))
+    }
+
     /// Resolves a stored (relative) cover art path to an absolute path on disk.
     pub fn resolve_cover_art(&self, relative: &Path) -> PathBuf {
         self.data_dir.join(relative)

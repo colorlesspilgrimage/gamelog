@@ -1,7 +1,9 @@
 mod app;
+mod cover_fetch;
 mod entry;
 mod keybindings;
 mod paths;
+mod settings;
 mod storage;
 mod ui;
 
@@ -11,18 +13,26 @@ use ratatui_image::picker::Picker;
 
 use app::{App, Mode, TextInputKind};
 use keybindings::Keybindings;
+use settings::{CoverSource, Settings};
 use storage::Library;
 
 fn main() -> Result<()> {
     let library = Library::load()?;
     let (keybindings, keybindings_warning) = Keybindings::load()?;
+    let loaded_settings = Settings::load()?;
+    let first_run = loaded_settings.is_none();
+    let settings = loaded_settings.unwrap_or_default();
 
     let terminal = ratatui::init();
     // Must run after entering the alternate screen but before reading events.
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
-    let mut app = App::new(library, picker, keybindings);
-    app.status_message = keybindings_warning;
+    let mut app = App::new(library, picker, keybindings, settings);
+    if first_run {
+        app.mode = Mode::SetupChooseSource;
+    } else {
+        app.status_message = keybindings_warning;
+    }
     let result = run(terminal, &mut app);
 
     ratatui::restore();
@@ -32,6 +42,11 @@ fn main() -> Result<()> {
 fn run(mut terminal: ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
     while !app.should_quit {
         terminal.draw(|frame| ui::draw(frame, app))?;
+
+        if app.pending_cover_fetch.is_some() {
+            app.run_pending_cover_fetch()?;
+            continue;
+        }
 
         if let Event::Key(key) = event::read()? {
             if key.kind != KeyEventKind::Press {
@@ -108,6 +123,33 @@ fn run(mut terminal: ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                         TextInputKind::EditReleaseDate => app.commit_release_date()?,
                         TextInputKind::ImportCoverArt => app.commit_import_cover()?,
                     },
+                    _ => {}
+                },
+                Mode::SetupChooseSource => match key.code {
+                    KeyCode::Char('1') => app.choose_setup_source(CoverSource::SteamGridDb),
+                    KeyCode::Char('2') => app.choose_setup_source(CoverSource::Rawg),
+                    KeyCode::Char('3') => app.choose_setup_source(CoverSource::Manual),
+                    KeyCode::Esc => app.choose_setup_source(CoverSource::Manual),
+                    _ => {}
+                },
+                Mode::EnterApiKey { .. } => match key.code {
+                    KeyCode::Esc => app.cancel_api_key_entry(),
+                    KeyCode::Backspace => {
+                        app.input_buffer.pop();
+                    }
+                    KeyCode::Char(c) => app.input_buffer.push(c),
+                    KeyCode::Enter => app.submit_api_key()?,
+                    _ => {}
+                },
+                Mode::CoverFetchChoice { entry_id, tried } => match key.code {
+                    KeyCode::Char('1') => {
+                        app.choose_fallback_source(entry_id, tried, CoverSource::SteamGridDb)
+                    }
+                    KeyCode::Char('2') => {
+                        app.choose_fallback_source(entry_id, tried, CoverSource::Rawg)
+                    }
+                    KeyCode::Char('m') => app.choose_manual_cover(entry_id),
+                    KeyCode::Char('s') | KeyCode::Esc => app.skip_cover(),
                     _ => {}
                 },
             }
