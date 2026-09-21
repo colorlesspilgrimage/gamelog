@@ -1,0 +1,110 @@
+# gamelog
+
+A terminal UI for logging and tracking the video games you play, written in Rust with [ratatui](https://ratatui.rs/).
+
+Track title, system, status, hours played, a 5-star rating, cover art, and freeform notes for every game — all from a fast, keyboard-driven split-pane interface, with your data stored as plain JSON in a single hidden directory in your home folder.
+
+## Screenshots
+
+**Browsing your library**, with cover art rendered inline (real graphics on Kitty/iTerm2/Sixel-capable terminals, a Unicode half-block fallback elsewhere):
+
+![Browsing a library entry with cover art, info, and notes](docs/screenshots/browse.png)
+
+**Adding a new entry**, via a small modal popup — the same pattern used for editing any field, confirming deletes, and setting a rating:
+
+![Add entry popup over the main view](docs/screenshots/add-entry.png)
+
+**First-run setup**, where you choose a default source for automatic cover art:
+
+![First-run wizard for choosing a cover art source](docs/screenshots/first-run.png)
+
+## Features
+
+- **Split-pane browsing** — a scrollable, alphabetized list on the left (toggle between all entries and a single system with `Tab`/`Shift+Tab`), and a detail pane on the right showing cover art, info, and notes for the selected entry.
+- **Full entry model** — title, system/platform, release date, status (*Want to Play* / *Playing* / *Played*), hours played, a 0–5 star rating, cover art, and freeform persistent notes.
+- **Automatic cover art**, from either of two free APIs, or your own image files:
+  - [SteamGridDB](https://www.steamgriddb.com/) — purpose-built box/grid art, best visual quality.
+  - [RAWG.io](https://rawg.io/apidocs) — broader metadata coverage, banner-style images.
+  - Manual — point at a local image file yourself with `c`.
+
+  A first-run wizard asks which source you'd like as your default (prompting for its free API key if you pick an online one). New entries automatically try to fetch cover art from that default; if it fails or finds nothing, a popup lets you try the other source, import a file, or skip entirely.
+- **`Fetch All Covers`** — backfill cover art for every entry that's missing one, all in the background. Fetches run through a small worker pool (never more than a handful of requests in flight at once, regardless of library size) and automatically retry with backoff if an API rate-limits you.
+- **Fully asynchronous fetching** — cover art downloads never block the UI; you can keep browsing and editing while they run.
+- **Configurable keybindings** — every action's key is read from a plain TOML file (`~/.gamelog/keybindings.toml`), generated with comments on first run. A live help bar along the bottom always reflects whatever you've actually bound.
+- **Everything in one hidden folder** — your library (`entries.json`), imported/downloaded cover art (`covers/`), keybindings, and settings all live under `~/.gamelog`, not scattered across platform-specific config directories.
+- **Safe writes** — saves are atomic (written to a temp file, then renamed into place), so an interrupted write can't corrupt your library.
+
+## Installing
+
+### Prerequisites
+
+- A Rust toolchain (install via [rustup](https://rustup.rs/) if you don't have one).
+- A terminal emulator. Any ANSI terminal works; for inline cover art images, use one that supports the Kitty, iTerm2, or Sixel graphics protocol (e.g. [kitty](https://sw.kovidgoyal.net/kitty/), [foot](https://codeberg.org/dnkl/foot), [WezTerm](https://wezfurlong.org/wezterm/)) — other terminals still work, falling back to a Unicode block-art rendering of the cover.
+
+### Build from source
+
+```sh
+git clone https://github.com/colorlesspilgrimage/gamelog.git
+cd gamelog
+cargo build --release
+```
+
+The compiled binary will be at `target/release/gamelog`.
+
+### Install it somewhere on your `PATH`
+
+Either let Cargo install it for you:
+
+```sh
+cargo install --path .
+```
+
+(this places it at `~/.cargo/bin/gamelog`, which `rustup` puts on your `PATH` by default), or copy the release binary manually:
+
+```sh
+cp target/release/gamelog ~/.local/bin/
+```
+
+Then just run:
+
+```sh
+gamelog
+```
+
+## Configuration
+
+Everything gamelog stores lives under `~/.gamelog/`:
+
+| File | Purpose |
+|---|---|
+| `entries.json` | Your game library. |
+| `covers/` | Cover art images, imported or downloaded. |
+| `keybindings.toml` | Key-to-action bindings, written with comments on first run. |
+| `settings.toml` | Your default cover art source and API keys. |
+
+Edit `keybindings.toml` or `settings.toml` in any text editor and restart gamelog to pick up changes.
+
+## Default keybindings
+
+Shown contextually along the bottom of the screen at all times; the primary browsing keys are below and fully customizable via `keybindings.toml`.
+
+| Key | Action |
+|---|---|
+| `j` / `k` (or `↓` / `↑`) | Navigate the list |
+| `Tab` / `Shift+Tab` | Cycle the system filter |
+| `Enter` | Edit notes |
+| `a` | Add an entry |
+| `d` | Delete the selected entry |
+| `T` | Edit title |
+| `p` | Edit system/platform |
+| `R` | Edit release date |
+| `s` | Cycle status |
+| `h` | Edit hours played |
+| `r` | Set rating |
+| `c` | Import cover art from a local file |
+| `F` | Fetch cover art for every entry that's missing one |
+| `q` (or `Esc`) | Quit |
+
+## License
+
+MIT — see [LICENSE](LICENSE).
