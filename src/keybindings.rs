@@ -3,8 +3,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use crossterm::event::KeyCode;
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+
+use crate::paths::gamelog_dir;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -79,9 +80,7 @@ quit = { Char = "q" }
 
 impl Keybindings {
     fn config_path() -> Result<PathBuf> {
-        let dirs = ProjectDirs::from("", "", "gamelog")
-            .context("could not determine a config directory for this platform")?;
-        Ok(dirs.config_dir().join("keybindings.toml"))
+        Ok(gamelog_dir()?.join("keybindings.toml"))
     }
 
     /// Loads keybindings from disk, writing out a commented default file on

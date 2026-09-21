@@ -1,6 +1,7 @@
 mod app;
 mod entry;
 mod keybindings;
+mod paths;
 mod storage;
 mod ui;
 

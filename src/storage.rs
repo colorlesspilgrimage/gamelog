@@ -5,11 +5,11 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::entry::Entry;
+use crate::paths::gamelog_dir;
 
 const CURRENT_VERSION: u32 = 1;
 
@@ -26,9 +26,7 @@ pub struct Library {
 
 impl Library {
     fn data_dir() -> Result<PathBuf> {
-        let dirs = ProjectDirs::from("", "", "gamelog")
-            .context("could not determine a data directory for this platform")?;
-        Ok(dirs.data_dir().to_path_buf())
+        gamelog_dir()
     }
 
     fn entries_path(data_dir: &Path) -> PathBuf {
