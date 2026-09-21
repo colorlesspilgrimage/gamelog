@@ -155,12 +155,12 @@ fn draw_info(frame: &mut Frame, entry: &Entry, session_elapsed: Option<Duration>
 }
 
 /// Formats a duration as `HH:MM:SS` for the live session timer.
-fn format_duration(d: Duration) -> String {
+pub(crate) fn format_duration(d: Duration) -> String {
     let secs = d.as_secs();
     format!("{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
 }
 
-fn stars(count: u8) -> String {
+pub(crate) fn stars(count: u8) -> String {
     let filled = "★".repeat(count as usize);
     let empty = "☆".repeat((5u8.saturating_sub(count)) as usize);
     format!("{filled}{empty}")

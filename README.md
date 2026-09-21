@@ -32,6 +32,7 @@ Track title, system, status, hours played, a 5-star rating, cover art, and freef
 - **`Fetch All Covers`** — backfill cover art for every entry that's missing one, all in the background. Fetches run through a small worker pool (never more than a handful of requests in flight at once, regardless of library size) and automatically retry with backoff if an API rate-limits you.
 - **Fully asynchronous fetching** — cover art downloads never block the UI; you can keep browsing and editing while they run.
 - **Configurable keybindings** — every action's key is read from a plain TOML file (`~/.gamelog/keybindings.toml`), generated with comments on first run. A live help bar along the bottom always reflects whatever you've actually bound.
+- **Optional GUI** — run with `--gui` for a native desktop window instead of the terminal UI, driven by buttons and dialogs rather than keybindings. It reads and writes the exact same `~/.gamelog` data, so you can switch between the two freely. See [GUI mode](#gui-mode) below.
 - **Everything in one hidden folder** — your library (`entries.json`), imported/downloaded cover art (`covers/`), keybindings, and settings all live under `~/.gamelog`, not scattered across platform-specific config directories.
 - **Safe writes** — saves are atomic (written to a temp file, then renamed into place), so an interrupted write can't corrupt your library.
 
@@ -85,7 +86,21 @@ Everything gamelog stores lives under `~/.gamelog/`:
 
 Edit `keybindings.toml` or `settings.toml` in any text editor and restart gamelog to pick up changes.
 
+## GUI mode
+
+Prefer a mouse-driven interface? Launch gamelog with `--gui` for a native desktop window (built with [egui](https://github.com/emilk/egui)/[eframe](https://github.com/emilk/eframe)) instead of the terminal UI:
+
+```sh
+gamelog --gui
+```
+
+It's the same library underneath — the GUI reads and writes the exact same `entries.json`, `covers/`, and `settings.toml` as the terminal UI, so you can switch between the two freely, even mid-session. Every feature described above is available: browsing and filtering by system, the full entry model, play sessions (with a live-counting timer), the first-run cover art wizard, automatic cover art fetching with fallback, `Fetch All Covers`, and manual cover art import via a native file picker.
+
+The one thing that doesn't carry over is `keybindings.toml`: the GUI is driven entirely by on-screen buttons and dialogs rather than configurable keys, since there's no keyboard-hint footer to remap.
+
 ## Default keybindings
+
+*(Terminal UI only — the GUI uses on-screen buttons instead; see [GUI mode](#gui-mode).)*
 
 Shown contextually along the bottom of the screen at all times; the primary browsing keys are below and fully customizable via `keybindings.toml`.
 

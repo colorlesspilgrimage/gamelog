@@ -1,6 +1,7 @@
 mod app;
 mod cover_fetch;
 mod entry;
+mod gui;
 mod keybindings;
 mod paths;
 mod settings;
@@ -24,6 +25,10 @@ fn main() -> Result<()> {
     let loaded_settings = Settings::load()?;
     let first_run = loaded_settings.is_none();
     let settings = loaded_settings.unwrap_or_default();
+
+    if std::env::args().any(|arg| arg == "--gui") {
+        return gui::run(library, keybindings, settings, first_run);
+    }
 
     let terminal = ratatui::init();
     // Must run after entering the alternate screen but before reading events.

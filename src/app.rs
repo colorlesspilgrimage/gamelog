@@ -245,7 +245,7 @@ impl App {
         self.list_state.selected().and_then(|i| entries.get(i).copied())
     }
 
-    fn clamp_selection(&mut self) {
+    pub fn clamp_selection(&mut self) {
         let len = self.visible_entries().len();
         if len == 0 {
             self.list_state.select(None);
