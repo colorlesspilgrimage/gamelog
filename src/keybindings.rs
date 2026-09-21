@@ -19,6 +19,7 @@ pub struct Keybindings {
     pub delete_entry: KeyCode,
     pub cycle_status: KeyCode,
     pub edit_hours: KeyCode,
+    pub toggle_session: KeyCode,
     pub set_rating: KeyCode,
     pub import_cover: KeyCode,
     pub edit_title: KeyCode,
@@ -40,6 +41,7 @@ impl Default for Keybindings {
             delete_entry: KeyCode::Char('d'),
             cycle_status: KeyCode::Char('s'),
             edit_hours: KeyCode::Char('h'),
+            toggle_session: KeyCode::Char('t'),
             set_rating: KeyCode::Char('r'),
             import_cover: KeyCode::Char('c'),
             edit_title: KeyCode::Char('T'),
@@ -72,6 +74,7 @@ add_entry = { Char = "a" }
 delete_entry = { Char = "d" }
 cycle_status = { Char = "s" }
 edit_hours = { Char = "h" }
+toggle_session = { Char = "t" }
 set_rating = { Char = "r" }
 import_cover = { Char = "c" }
 edit_title = { Char = "T" }
@@ -110,7 +113,7 @@ impl Keybindings {
         Ok((keybindings, warning))
     }
 
-    fn bindings(&self) -> [(&'static str, KeyCode); 16] {
+    fn bindings(&self) -> [(&'static str, KeyCode); 17] {
         [
             ("move_up", self.move_up),
             ("move_down", self.move_down),
@@ -121,6 +124,7 @@ impl Keybindings {
             ("delete_entry", self.delete_entry),
             ("cycle_status", self.cycle_status),
             ("edit_hours", self.edit_hours),
+            ("toggle_session", self.toggle_session),
             ("set_rating", self.set_rating),
             ("import_cover", self.import_cover),
             ("edit_title", self.edit_title),

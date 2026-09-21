@@ -22,6 +22,7 @@ Track title, system, status, hours played, a 5-star rating, cover art, and freef
 
 - **Split-pane browsing** — a scrollable, alphabetized list on the left (toggle between all entries and a single system with `Tab`/`Shift+Tab`), and a detail pane on the right showing cover art, info, and notes for the selected entry.
 - **Full entry model** — title, system/platform, release date, status (*Want to Play* / *Playing* / *Played*), hours played, a 0–5 star rating, cover art, and freeform persistent notes.
+- **Play sessions** — press `t` to start a live timer when you sit down to play, and press it again when you stop; the elapsed time is added to that entry's hours automatically. A running session is always visible in the footer, even while you browse other entries, and is safely finalized if you quit mid-session.
 - **Automatic cover art**, from either of two free APIs, or your own image files:
   - [SteamGridDB](https://www.steamgriddb.com/) — purpose-built box/grid art, best visual quality.
   - [RAWG.io](https://rawg.io/apidocs) — broader metadata coverage, banner-style images.
@@ -100,6 +101,7 @@ Shown contextually along the bottom of the screen at all times; the primary brow
 | `R` | Edit release date |
 | `s` | Cycle status |
 | `h` | Edit hours played |
+| `t` | Start/stop a play session (adds elapsed time to hours played) |
 | `r` | Set rating |
 | `c` | Import cover art from a local file |
 | `F` | Fetch cover art for every entry that's missing one |

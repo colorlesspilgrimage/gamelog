@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use image::ImageReader;
@@ -112,6 +113,14 @@ struct CoverFetchJob {
     interactive: bool,
 }
 
+/// A play session in progress: started for `entry_id` at `started_at`, with
+/// elapsed time recomputed from the wall clock on every render.
+#[derive(Debug, Clone, Copy)]
+pub struct ActiveSession {
+    pub entry_id: Uuid,
+    pub started_at: Instant,
+}
+
 /// The result of a background cover art fetch, sent back to the main thread
 /// over a channel once the network call completes.
 struct CoverFetchResult {
@@ -165,6 +174,8 @@ pub struct App {
     /// `(done, succeeded, total)` for an in-progress "fetch all" batch.
     /// Shown in the footer in place of the normal hints until it completes.
     pub bulk_fetch_progress: Option<(usize, usize, usize)>,
+    /// The play session currently timing, if any. Only one can run at a time.
+    pub active_session: Option<ActiveSession>,
     cover_job_tx: Sender<CoverFetchJob>,
     cover_fetch_rx: Receiver<CoverFetchResult>,
     pending_new_title: Option<String>,
@@ -189,6 +200,7 @@ impl App {
             settings,
             should_quit: false,
             bulk_fetch_progress: None,
+            active_session: None,
             cover_job_tx,
             cover_fetch_rx,
             pending_new_title: None,
@@ -316,6 +328,16 @@ impl App {
         self.mode = Mode::Normal;
         self.input_buffer.clear();
         self.pending_new_title = None;
+    }
+
+    /// Finalizes any in-progress play session (saving its elapsed hours)
+    /// before exiting, so quitting never silently discards playtime.
+    pub fn quit(&mut self) -> Result<()> {
+        if let Some(session) = self.active_session {
+            self.stop_session(session)?;
+        }
+        self.should_quit = true;
+        Ok(())
     }
 
     // --- Notes ---
@@ -489,6 +511,9 @@ impl App {
 
     pub fn confirm_delete(&mut self) -> Result<()> {
         if let Some(id) = self.selected_entry().map(|e| e.id) {
+            if self.active_session.is_some_and(|s| s.entry_id == id) {
+                self.active_session = None;
+            }
             self.library.remove(id);
             self.image_cache.remove(&id);
             self.library.save()?;
@@ -536,6 +561,61 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    // --- Sessions ---
+
+    /// Starts a play session timer for the selected entry, or, if one is
+    /// already running for it, stops the timer and adds the elapsed time to
+    /// its hours played.
+    pub fn toggle_session(&mut self) -> Result<()> {
+        let Some(selected_id) = self.selected_entry().map(|e| e.id) else {
+            return Ok(());
+        };
+        match self.active_session {
+            Some(session) if session.entry_id == selected_id => self.stop_session(session)?,
+            Some(session) => {
+                let other_title = self
+                    .library
+                    .get(session.entry_id)
+                    .map(|e| e.title.clone())
+                    .unwrap_or_default();
+                self.status_message = Some(format!(
+                    "A session is already running for '{other_title}'. Stop it first."
+                ));
+            }
+            None => {
+                self.active_session = Some(ActiveSession {
+                    entry_id: selected_id,
+                    started_at: Instant::now(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn stop_session(&mut self, session: ActiveSession) -> Result<()> {
+        let elapsed_hours = session.started_at.elapsed().as_secs_f32() / 3600.0;
+        let mut title = String::new();
+        let mut total_hours = 0.0;
+        if let Some(entry) = self.library.get_mut(session.entry_id) {
+            entry.hours += elapsed_hours;
+            title = entry.title.clone();
+            total_hours = entry.hours;
+        }
+        self.active_session = None;
+        self.library.save()?;
+        self.status_message = Some(format!(
+            "Session ended: +{elapsed_hours:.2}h to {title} (total {total_hours:.1}h)."
+        ));
+        Ok(())
+    }
+
+    /// The entry and live elapsed time of the in-progress session, if any,
+    /// recomputed fresh from the wall clock so it can be shown as a
+    /// continuously-updating timer.
+    pub fn active_session_elapsed(&self) -> Option<(Uuid, Duration)> {
+        self.active_session.map(|s| (s.entry_id, s.started_at.elapsed()))
     }
 
     // --- Rating ---

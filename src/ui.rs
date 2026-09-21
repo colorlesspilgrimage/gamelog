@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -80,8 +82,13 @@ fn draw_detail(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
 
+    let session_elapsed = app
+        .active_session_elapsed()
+        .filter(|(id, _)| *id == entry.id)
+        .map(|(_, elapsed)| elapsed);
+
     draw_cover(frame, app, &entry, cover_area);
-    draw_info(frame, &entry, info_area);
+    draw_info(frame, &entry, session_elapsed, info_area);
     draw_notes(frame, app, notes_area);
 }
 
@@ -102,7 +109,7 @@ fn draw_cover(frame: &mut Frame, app: &mut App, entry: &Entry, area: Rect) {
     }
 }
 
-fn draw_info(frame: &mut Frame, entry: &Entry, area: Rect) {
+fn draw_info(frame: &mut Frame, entry: &Entry, session_elapsed: Option<Duration>, area: Rect) {
     let release_date = entry
         .release_date
         .map(|d| d.format("%Y-%m-%d").to_string())
@@ -130,12 +137,27 @@ fn draw_info(frame: &mut Frame, entry: &Entry, area: Rect) {
             Span::raw("Status: "),
             Span::styled(entry.status.label(), status_style),
         ]),
-        Line::from(format!("Hours: {:.1}", entry.hours)),
+        match session_elapsed {
+            Some(elapsed) => Line::from(vec![
+                Span::raw(format!("Hours: {:.1} ", entry.hours)),
+                Span::styled(
+                    format!("(session: {})", format_duration(elapsed)),
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            None => Line::from(format!("Hours: {:.1}", entry.hours)),
+        },
         Line::from(format!("Rating: {rating}")),
     ];
 
     let info = Paragraph::new(lines).block(Block::default().title(" Info ").borders(Borders::ALL));
     frame.render_widget(info, area);
+}
+
+/// Formats a duration as `HH:MM:SS` for the live session timer.
+fn format_duration(d: Duration) -> String {
+    let secs = d.as_secs();
+    format!("{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
 }
 
 fn stars(count: u8) -> String {
@@ -205,6 +227,7 @@ fn footer_hints(mode: &Mode, kb: &Keybindings) -> Vec<(String, &'static str)> {
             (key_label(kb.edit_release_date), "Release Date"),
             (key_label(kb.cycle_status), "Status"),
             (key_label(kb.edit_hours), "Hours"),
+            (key_label(kb.toggle_session), "Start/Stop Session"),
             (key_label(kb.set_rating), "Rating"),
             (key_label(kb.import_cover), "Cover Art"),
             (key_label(kb.fetch_all_covers), "Fetch All Covers"),
@@ -257,6 +280,20 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let line = if let Some((done, succeeded, total)) = app.bulk_fetch_progress {
         Line::from(Span::styled(
             format!("Fetching cover art in the background... {done}/{total} done ({succeeded} found)"),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ))
+    } else if let Some((entry_id, elapsed)) = app.active_session_elapsed() {
+        let title = app
+            .library
+            .get(entry_id)
+            .map(|e| e.title.as_str())
+            .unwrap_or("");
+        Line::from(Span::styled(
+            format!(
+                "Session running for '{title}': {}  (press {} to stop)",
+                format_duration(elapsed),
+                key_label(app.keybindings.toggle_session)
+            ),
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         ))
     } else if let Some(message) = &app.status_message {

@@ -67,10 +67,10 @@ fn run(mut terminal: ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                     let kb = app.keybindings.clone();
                     match key.code {
                         // Fixed fallbacks: always available regardless of config.
-                        KeyCode::Esc => app.should_quit = true,
+                        KeyCode::Esc => app.quit()?,
                         KeyCode::Up => app.select_previous(),
                         KeyCode::Down => app.select_next(),
-                        code if code == kb.quit => app.should_quit = true,
+                        code if code == kb.quit => app.quit()?,
                         code if code == kb.move_up => app.select_previous(),
                         code if code == kb.move_down => app.select_next(),
                         code if code == kb.filter_next => app.cycle_filter_next(),
@@ -80,6 +80,7 @@ fn run(mut terminal: ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                         code if code == kb.delete_entry => app.begin_delete(),
                         code if code == kb.cycle_status => app.cycle_status()?,
                         code if code == kb.edit_hours => app.begin_edit_hours(),
+                        code if code == kb.toggle_session => app.toggle_session()?,
                         code if code == kb.set_rating => app.begin_rating(),
                         code if code == kb.import_cover => app.begin_import_cover(),
                         code if code == kb.edit_title => app.begin_edit_title(),
