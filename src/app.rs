@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::Result;
@@ -93,16 +94,61 @@ pub enum Mode {
     },
 }
 
+/// The number of persistent worker threads that process cover art fetches.
+/// Bounding this (rather than spawning a raw thread per fetch) keeps
+/// gamelog from hammering SteamGridDB/RAWG with hundreds of simultaneous
+/// requests during a "fetch all" on a large library.
+const COVER_FETCH_WORKERS: usize = 4;
+
+/// A queued cover art fetch, sent to the worker pool.
+struct CoverFetchJob {
+    entry_id: Uuid,
+    source: CoverSource,
+    api_key: String,
+    title: String,
+    /// Whether a failure should pop up the interactive `CoverFetchChoice`
+    /// dialog (single-entry "add" flow) or fail silently and just count
+    /// toward a bulk-fetch summary ("fetch all" flow).
+    interactive: bool,
+}
+
 /// The result of a background cover art fetch, sent back to the main thread
 /// over a channel once the network call completes.
 struct CoverFetchResult {
     entry_id: Uuid,
     source: CoverSource,
-    /// Whether a failure should pop up the interactive `CoverFetchChoice`
-    /// dialog (single-entry "add" flow) or fail silently and just count
-    /// toward a bulk-fetch summary ("fetch all" flow).
     interactive: bool,
     outcome: Result<Option<(Vec<u8>, String)>, String>,
+}
+
+/// Spawns the fixed-size worker pool that processes cover art fetch jobs.
+/// Each worker pulls the next job from the shared queue, runs it
+/// (including any rate-limit retry/backoff), and reports the outcome back
+/// over `result_tx`. Workers run for the lifetime of the process.
+fn spawn_cover_fetch_workers(
+    job_rx: Arc<Mutex<Receiver<CoverFetchJob>>>,
+    result_tx: Sender<CoverFetchResult>,
+) {
+    for _ in 0..COVER_FETCH_WORKERS {
+        let job_rx = Arc::clone(&job_rx);
+        let result_tx = result_tx.clone();
+        thread::spawn(move || loop {
+            let job = {
+                let rx = job_rx.lock().unwrap();
+                rx.recv()
+            };
+            let Ok(job) = job else {
+                break; // Sender dropped: no more jobs will ever arrive.
+            };
+            let outcome = cover_fetch::fetch_cover_with_retry(job.source, &job.api_key, &job.title);
+            let _ = result_tx.send(CoverFetchResult {
+                entry_id: job.entry_id,
+                source: job.source,
+                interactive: job.interactive,
+                outcome,
+            });
+        });
+    }
 }
 
 pub struct App {
@@ -119,7 +165,7 @@ pub struct App {
     /// `(done, succeeded, total)` for an in-progress "fetch all" batch.
     /// Shown in the footer in place of the normal hints until it completes.
     pub bulk_fetch_progress: Option<(usize, usize, usize)>,
-    cover_fetch_tx: Sender<CoverFetchResult>,
+    cover_job_tx: Sender<CoverFetchJob>,
     cover_fetch_rx: Receiver<CoverFetchResult>,
     pending_new_title: Option<String>,
     image_cache: HashMap<Uuid, Option<StatefulProtocol>>,
@@ -127,7 +173,10 @@ pub struct App {
 
 impl App {
     pub fn new(library: Library, picker: Picker, keybindings: Keybindings, settings: Settings) -> Self {
+        let (cover_job_tx, cover_job_rx) = mpsc::channel();
         let (cover_fetch_tx, cover_fetch_rx) = mpsc::channel();
+        spawn_cover_fetch_workers(Arc::new(Mutex::new(cover_job_rx)), cover_fetch_tx);
+
         let mut app = Self {
             library,
             filter: Filter::All,
@@ -140,7 +189,7 @@ impl App {
             settings,
             should_quit: false,
             bulk_fetch_progress: None,
-            cover_fetch_tx,
+            cover_job_tx,
             cover_fetch_rx,
             pending_new_title: None,
             image_cache: HashMap::new(),
@@ -642,10 +691,12 @@ impl App {
             return;
         };
 
-        let tx = self.cover_fetch_tx.clone();
-        thread::spawn(move || {
-            let outcome = cover_fetch::fetch_cover(source, &api_key, &title).map_err(|e| e.to_string());
-            let _ = tx.send(CoverFetchResult { entry_id, source, interactive, outcome });
+        let _ = self.cover_job_tx.send(CoverFetchJob {
+            entry_id,
+            source,
+            api_key,
+            title,
+            interactive,
         });
     }
 
