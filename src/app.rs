@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 
 use anyhow::Result;
 use image::ImageReader;
@@ -91,6 +93,18 @@ pub enum Mode {
     },
 }
 
+/// The result of a background cover art fetch, sent back to the main thread
+/// over a channel once the network call completes.
+struct CoverFetchResult {
+    entry_id: Uuid,
+    source: CoverSource,
+    /// Whether a failure should pop up the interactive `CoverFetchChoice`
+    /// dialog (single-entry "add" flow) or fail silently and just count
+    /// toward a bulk-fetch summary ("fetch all" flow).
+    interactive: bool,
+    outcome: Result<Option<(Vec<u8>, String)>, String>,
+}
+
 pub struct App {
     pub library: Library,
     pub filter: Filter,
@@ -102,16 +116,18 @@ pub struct App {
     pub keybindings: Keybindings,
     pub settings: Settings,
     pub should_quit: bool,
-    /// Set right after creating an entry when it should be auto-fetched;
-    /// drained by the event loop between draws so a "Fetching..." message
-    /// is visible before the blocking network call runs.
-    pub pending_cover_fetch: Option<(Uuid, CoverSource)>,
+    /// `(done, succeeded, total)` for an in-progress "fetch all" batch.
+    /// Shown in the footer in place of the normal hints until it completes.
+    pub bulk_fetch_progress: Option<(usize, usize, usize)>,
+    cover_fetch_tx: Sender<CoverFetchResult>,
+    cover_fetch_rx: Receiver<CoverFetchResult>,
     pending_new_title: Option<String>,
     image_cache: HashMap<Uuid, Option<StatefulProtocol>>,
 }
 
 impl App {
     pub fn new(library: Library, picker: Picker, keybindings: Keybindings, settings: Settings) -> Self {
+        let (cover_fetch_tx, cover_fetch_rx) = mpsc::channel();
         let mut app = Self {
             library,
             filter: Filter::All,
@@ -123,7 +139,9 @@ impl App {
             keybindings,
             settings,
             should_quit: false,
-            pending_cover_fetch: None,
+            bulk_fetch_progress: None,
+            cover_fetch_tx,
+            cover_fetch_rx,
             pending_new_title: None,
             image_cache: HashMap::new(),
         };
@@ -304,15 +322,13 @@ impl App {
         self.input_buffer.clear();
         self.select_by_id(id);
 
+        self.mode = Mode::Normal;
         match self.settings.default_cover_source {
-            CoverSource::Manual => {
-                self.mode = Mode::Normal;
-            }
+            CoverSource::Manual => {}
             source => {
                 if self.settings.api_key_for(source).is_some() {
-                    self.pending_cover_fetch = Some((id, source));
                     self.status_message = Some(format!("Fetching cover art from {}...", source.label()));
-                    self.mode = Mode::Normal;
+                    self.spawn_cover_fetch(id, source, true);
                 } else {
                     // Shouldn't normally happen, since choosing an online
                     // default requires providing a key, but handle it
@@ -591,9 +607,9 @@ impl App {
             None => self.finish_setup(source),
             Some(id) => {
                 self.settings.save()?;
-                self.pending_cover_fetch = Some((id, source));
                 self.status_message = Some(format!("Fetching cover art from {}...", source.label()));
                 self.mode = Mode::Normal;
+                self.spawn_cover_fetch(id, source, true);
             }
         }
         Ok(())
@@ -609,25 +625,42 @@ impl App {
         }
     }
 
-    // --- Automatic cover art fetch ---
+    // --- Automatic cover art fetch (background threads) ---
 
-    /// Performs the network fetch set up by `pending_cover_fetch`. Called
-    /// from the event loop between draws, so a "Fetching..." status message
-    /// is visible on screen before this blocking call runs.
-    pub fn run_pending_cover_fetch(&mut self) -> Result<()> {
-        let Some((entry_id, source)) = self.pending_cover_fetch.take() else {
-            return Ok(());
-        };
+    /// Spawns a background thread to fetch cover art for `entry_id` from
+    /// `source`, returning immediately so the UI stays responsive. The
+    /// result arrives later via `poll_cover_fetch_results`.
+    fn spawn_cover_fetch(&mut self, entry_id: Uuid, source: CoverSource, interactive: bool) {
         let Some(entry) = self.library.get(entry_id) else {
-            return Ok(());
+            return;
         };
         let title = entry.title.clone();
         let Some(api_key) = self.settings.api_key_for(source).map(str::to_string) else {
-            self.mode = Mode::CoverFetchChoice { entry_id, tried: vec![source] };
-            return Ok(());
+            if interactive {
+                self.mode = Mode::CoverFetchChoice { entry_id, tried: vec![source] };
+            }
+            return;
         };
 
-        match cover_fetch::fetch_cover(source, &api_key, &title) {
+        let tx = self.cover_fetch_tx.clone();
+        thread::spawn(move || {
+            let outcome = cover_fetch::fetch_cover(source, &api_key, &title).map_err(|e| e.to_string());
+            let _ = tx.send(CoverFetchResult { entry_id, source, interactive, outcome });
+        });
+    }
+
+    /// Drains any completed background fetches without blocking. Called
+    /// once per event loop tick.
+    pub fn poll_cover_fetch_results(&mut self) -> Result<()> {
+        while let Ok(result) = self.cover_fetch_rx.try_recv() {
+            self.handle_cover_fetch_result(result)?;
+        }
+        Ok(())
+    }
+
+    fn handle_cover_fetch_result(&mut self, result: CoverFetchResult) -> Result<()> {
+        let CoverFetchResult { entry_id, source, interactive, outcome } = result;
+        match outcome {
             Ok(Some((bytes, extension))) => {
                 let relative = self.library.import_cover_art_bytes(entry_id, &bytes, &extension)?;
                 if let Some(entry) = self.library.get_mut(entry_id) {
@@ -635,27 +668,58 @@ impl App {
                 }
                 self.image_cache.remove(&entry_id);
                 self.library.save()?;
-                self.status_message = Some(format!("Cover art added from {}.", source.label()));
+                if self.bulk_fetch_progress.is_none() {
+                    self.status_message = Some(format!("Cover art added from {}.", source.label()));
+                }
+                self.note_bulk_progress(true);
             }
             Ok(None) => {
-                self.status_message = Some(format!("No results from {}.", source.label()));
-                self.mode = Mode::CoverFetchChoice { entry_id, tried: vec![source] };
+                if self.bulk_fetch_progress.is_none() {
+                    self.status_message = Some(format!("No results from {}.", source.label()));
+                    if interactive {
+                        self.mode = Mode::CoverFetchChoice { entry_id, tried: vec![source] };
+                    }
+                }
+                self.note_bulk_progress(false);
             }
             Err(err) => {
-                self.status_message = Some(format!("{} request failed: {err}", source.label()));
-                self.mode = Mode::CoverFetchChoice { entry_id, tried: vec![source] };
+                if self.bulk_fetch_progress.is_none() {
+                    self.status_message = Some(format!("{} request failed: {err}", source.label()));
+                    if interactive {
+                        self.mode = Mode::CoverFetchChoice { entry_id, tried: vec![source] };
+                    }
+                }
+                self.note_bulk_progress(false);
             }
         }
         Ok(())
+    }
+
+    /// Advances the bulk-fetch progress counter, if a batch is running, and
+    /// posts a summary status message once it completes.
+    fn note_bulk_progress(&mut self, success: bool) {
+        let Some((done, succeeded, total)) = self.bulk_fetch_progress else {
+            return;
+        };
+        let done = done + 1;
+        let succeeded = succeeded + usize::from(success);
+        if done >= total {
+            self.status_message = Some(format!(
+                "Fetched cover art for {succeeded} of {total} entries."
+            ));
+            self.bulk_fetch_progress = None;
+        } else {
+            self.bulk_fetch_progress = Some((done, succeeded, total));
+        }
     }
 
     /// Attempts (or retries) fetching cover art for `entry_id` from
     /// `source`, prompting for an API key first if one isn't configured yet.
     pub fn choose_fallback_source(&mut self, entry_id: Uuid, tried: Vec<CoverSource>, source: CoverSource) {
         if self.settings.api_key_for(source).is_some() {
-            self.pending_cover_fetch = Some((entry_id, source));
             self.status_message = Some(format!("Fetching cover art from {}...", source.label()));
             self.mode = Mode::Normal;
+            self.spawn_cover_fetch(entry_id, source, true);
         } else {
             self.mode = Mode::EnterApiKey {
                 source,
@@ -674,6 +738,43 @@ impl App {
     pub fn skip_cover(&mut self) {
         self.status_message = Some("No cover art added.".to_string());
         self.mode = Mode::Normal;
+    }
+
+    /// Fetches cover art in the background for every entry missing one,
+    /// using the configured default source. Failures are silent per-entry
+    /// (no interactive fallback popup for each one); a summary is posted
+    /// once the whole batch completes.
+    pub fn begin_fetch_all_covers(&mut self) {
+        if self.bulk_fetch_progress.is_some() {
+            self.status_message = Some("A cover art fetch is already in progress.".to_string());
+            return;
+        }
+        let source = self.settings.default_cover_source;
+        if source == CoverSource::Manual {
+            self.status_message =
+                Some("Default cover source is Manual; nothing to fetch automatically.".to_string());
+            return;
+        }
+        if self.settings.api_key_for(source).is_none() {
+            self.status_message = Some(format!("No API key configured for {}.", source.label()));
+            return;
+        }
+        let targets: Vec<Uuid> = self
+            .library
+            .entries()
+            .iter()
+            .filter(|e| e.cover_art.is_none())
+            .map(|e| e.id)
+            .collect();
+        if targets.is_empty() {
+            self.status_message = Some("All entries already have cover art.".to_string());
+            return;
+        }
+
+        self.bulk_fetch_progress = Some((0, 0, targets.len()));
+        for id in targets {
+            self.spawn_cover_fetch(id, source, false);
+        }
     }
 
     /// Returns the decoded, protocol-encoded cover art for `entry`, loading

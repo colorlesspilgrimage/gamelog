@@ -24,6 +24,7 @@ pub struct Keybindings {
     pub edit_title: KeyCode,
     pub edit_system: KeyCode,
     pub edit_release_date: KeyCode,
+    pub fetch_all_covers: KeyCode,
     pub quit: KeyCode,
 }
 
@@ -44,6 +45,7 @@ impl Default for Keybindings {
             edit_title: KeyCode::Char('T'),
             edit_system: KeyCode::Char('p'),
             edit_release_date: KeyCode::Char('R'),
+            fetch_all_covers: KeyCode::Char('F'),
             quit: KeyCode::Char('q'),
         }
     }
@@ -75,6 +77,7 @@ import_cover = { Char = "c" }
 edit_title = { Char = "T" }
 edit_system = { Char = "p" }
 edit_release_date = { Char = "R" }
+fetch_all_covers = { Char = "F" }
 quit = { Char = "q" }
 "#;
 
@@ -107,7 +110,7 @@ impl Keybindings {
         Ok((keybindings, warning))
     }
 
-    fn bindings(&self) -> [(&'static str, KeyCode); 15] {
+    fn bindings(&self) -> [(&'static str, KeyCode); 16] {
         [
             ("move_up", self.move_up),
             ("move_down", self.move_down),
@@ -123,6 +126,7 @@ impl Keybindings {
             ("edit_title", self.edit_title),
             ("edit_system", self.edit_system),
             ("edit_release_date", self.edit_release_date),
+            ("fetch_all_covers", self.fetch_all_covers),
             ("quit", self.quit),
         ]
     }

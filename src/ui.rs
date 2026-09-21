@@ -207,6 +207,7 @@ fn footer_hints(mode: &Mode, kb: &Keybindings) -> Vec<(String, &'static str)> {
             (key_label(kb.edit_hours), "Hours"),
             (key_label(kb.set_rating), "Rating"),
             (key_label(kb.import_cover), "Cover Art"),
+            (key_label(kb.fetch_all_covers), "Fetch All Covers"),
             (key_label(kb.quit), "Quit"),
         ],
         Mode::EditingNotes => vec![
@@ -253,7 +254,12 @@ fn footer_hints(mode: &Mode, kb: &Keybindings) -> Vec<(String, &'static str)> {
 }
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
-    let line = if let Some(message) = &app.status_message {
+    let line = if let Some((done, succeeded, total)) = app.bulk_fetch_progress {
+        Line::from(Span::styled(
+            format!("Fetching cover art in the background... {done}/{total} done ({succeeded} found)"),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ))
+    } else if let Some(message) = &app.status_message {
         Line::from(Span::styled(
             message.clone(),
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),

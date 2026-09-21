@@ -7,6 +7,8 @@ mod settings;
 mod storage;
 mod ui;
 
+use std::time::Duration;
+
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui_image::picker::Picker;
@@ -43,8 +45,11 @@ fn run(mut terminal: ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
     while !app.should_quit {
         terminal.draw(|frame| ui::draw(frame, app))?;
 
-        if app.pending_cover_fetch.is_some() {
-            app.run_pending_cover_fetch()?;
+        // Cover art fetches run on background threads; drain any that have
+        // completed so their results show up promptly even with no input.
+        app.poll_cover_fetch_results()?;
+
+        if !event::poll(Duration::from_millis(150))? {
             continue;
         }
 
@@ -80,6 +85,7 @@ fn run(mut terminal: ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                         code if code == kb.edit_title => app.begin_edit_title(),
                         code if code == kb.edit_system => app.begin_edit_system(),
                         code if code == kb.edit_release_date => app.begin_edit_release_date(),
+                        code if code == kb.fetch_all_covers => app.begin_fetch_all_covers(),
                         _ => {}
                     }
                 }
