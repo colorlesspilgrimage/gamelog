@@ -8,6 +8,7 @@ use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use uuid::Uuid;
 
 use crate::entry::{Entry, Rating};
+use crate::keybindings::Keybindings;
 use crate::storage::Library;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,13 +80,14 @@ pub struct App {
     pub input_buffer: String,
     pub status_message: Option<String>,
     pub picker: Picker,
+    pub keybindings: Keybindings,
     pub should_quit: bool,
     pending_new_title: Option<String>,
     image_cache: HashMap<Uuid, Option<StatefulProtocol>>,
 }
 
 impl App {
-    pub fn new(library: Library, picker: Picker) -> Self {
+    pub fn new(library: Library, picker: Picker, keybindings: Keybindings) -> Self {
         let mut app = Self {
             library,
             filter: Filter::All,
@@ -94,6 +96,7 @@ impl App {
             input_buffer: String::new(),
             status_message: None,
             picker,
+            keybindings,
             should_quit: false,
             pending_new_title: None,
             image_cache: HashMap::new(),

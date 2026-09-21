@@ -1,5 +1,6 @@
 mod app;
 mod entry;
+mod keybindings;
 mod storage;
 mod ui;
 
@@ -8,16 +9,19 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui_image::picker::Picker;
 
 use app::{App, Mode, TextInputKind};
+use keybindings::Keybindings;
 use storage::Library;
 
 fn main() -> Result<()> {
     let library = Library::load()?;
+    let (keybindings, keybindings_warning) = Keybindings::load()?;
 
     let terminal = ratatui::init();
     // Must run after entering the alternate screen but before reading events.
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
-    let mut app = App::new(library, picker);
+    let mut app = App::new(library, picker, keybindings);
+    app.status_message = keybindings_warning;
     let result = run(terminal, &mut app);
 
     ratatui::restore();
@@ -36,24 +40,33 @@ fn run(mut terminal: ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
             app.clear_status_message();
 
             match app.mode.clone() {
-                Mode::Normal => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
-                    KeyCode::Up | KeyCode::Char('k') => app.select_previous(),
-                    KeyCode::Down | KeyCode::Char('j') => app.select_next(),
-                    KeyCode::Tab => app.cycle_filter_next(),
-                    KeyCode::BackTab => app.cycle_filter_previous(),
-                    KeyCode::Enter => app.begin_edit_notes(),
-                    KeyCode::Char('a') => app.begin_add_entry(),
-                    KeyCode::Char('d') => app.begin_delete(),
-                    KeyCode::Char('s') => app.cycle_status()?,
-                    KeyCode::Char('h') => app.begin_edit_hours(),
-                    KeyCode::Char('r') => app.begin_rating(),
-                    KeyCode::Char('c') => app.begin_import_cover(),
-                    KeyCode::Char('T') => app.begin_edit_title(),
-                    KeyCode::Char('p') => app.begin_edit_system(),
-                    KeyCode::Char('R') => app.begin_edit_release_date(),
-                    _ => {}
-                },
+                Mode::Normal => {
+                    // Cloned so comparing against it doesn't hold a borrow of
+                    // `app` while the matched arms mutate it below.
+                    let kb = app.keybindings.clone();
+                    match key.code {
+                        // Fixed fallbacks: always available regardless of config.
+                        KeyCode::Esc => app.should_quit = true,
+                        KeyCode::Up => app.select_previous(),
+                        KeyCode::Down => app.select_next(),
+                        code if code == kb.quit => app.should_quit = true,
+                        code if code == kb.move_up => app.select_previous(),
+                        code if code == kb.move_down => app.select_next(),
+                        code if code == kb.filter_next => app.cycle_filter_next(),
+                        code if code == kb.filter_prev => app.cycle_filter_previous(),
+                        code if code == kb.edit_notes => app.begin_edit_notes(),
+                        code if code == kb.add_entry => app.begin_add_entry(),
+                        code if code == kb.delete_entry => app.begin_delete(),
+                        code if code == kb.cycle_status => app.cycle_status()?,
+                        code if code == kb.edit_hours => app.begin_edit_hours(),
+                        code if code == kb.set_rating => app.begin_rating(),
+                        code if code == kb.import_cover => app.begin_import_cover(),
+                        code if code == kb.edit_title => app.begin_edit_title(),
+                        code if code == kb.edit_system => app.begin_edit_system(),
+                        code if code == kb.edit_release_date => app.begin_edit_release_date(),
+                        _ => {}
+                    }
+                }
                 Mode::EditingNotes => match key.code {
                     KeyCode::Esc => app.commit_notes()?,
                     KeyCode::Enter => app.input_buffer.push('\n'),

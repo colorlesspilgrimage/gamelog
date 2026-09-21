@@ -9,6 +9,7 @@ use ratatui_image::StatefulImage;
 
 use crate::app::{App, Mode, TextInputKind};
 use crate::entry::{Entry, Status};
+use crate::keybindings::{key_label, Keybindings};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [main_area, footer_area] =
@@ -178,39 +179,57 @@ fn draw_notes(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Keybinding hints for the currently active mode, shown along the bottom.
-fn footer_hints(mode: &Mode) -> Vec<(&'static str, &'static str)> {
+/// Normal-mode hints reflect the user's configured keybindings; the other
+/// modes use fixed dialog conventions (Enter/Esc/digits) that aren't
+/// user-configurable.
+fn footer_hints(mode: &Mode, kb: &Keybindings) -> Vec<(String, &'static str)> {
     match mode {
         Mode::Normal => vec![
-            ("j/k", "Navigate"),
-            ("Tab/S-Tab", "Filter"),
-            ("Enter", "Notes"),
-            ("a", "Add"),
-            ("d", "Delete"),
-            ("T", "Title"),
-            ("p", "Platform"),
-            ("R", "Release Date"),
-            ("s", "Status"),
-            ("h", "Hours"),
-            ("r", "Rating"),
-            ("c", "Cover Art"),
-            ("q", "Quit"),
+            (
+                format!("{}/{}", key_label(kb.move_down), key_label(kb.move_up)),
+                "Navigate",
+            ),
+            (
+                format!("{}/{}", key_label(kb.filter_next), key_label(kb.filter_prev)),
+                "Filter",
+            ),
+            (key_label(kb.edit_notes), "Notes"),
+            (key_label(kb.add_entry), "Add"),
+            (key_label(kb.delete_entry), "Delete"),
+            (key_label(kb.edit_title), "Title"),
+            (key_label(kb.edit_system), "Platform"),
+            (key_label(kb.edit_release_date), "Release Date"),
+            (key_label(kb.cycle_status), "Status"),
+            (key_label(kb.edit_hours), "Hours"),
+            (key_label(kb.set_rating), "Rating"),
+            (key_label(kb.import_cover), "Cover Art"),
+            (key_label(kb.quit), "Quit"),
         ],
-        Mode::EditingNotes => vec![("Enter", "Newline"), ("Esc", "Save & Exit")],
-        Mode::ConfirmDelete => vec![("y", "Confirm"), ("n/Esc", "Cancel")],
+        Mode::EditingNotes => vec![
+            ("Enter".to_string(), "Newline"),
+            ("Esc".to_string(), "Save & Exit"),
+        ],
+        Mode::ConfirmDelete => vec![
+            ("y".to_string(), "Confirm"),
+            ("n/Esc".to_string(), "Cancel"),
+        ],
         Mode::AwaitingRating => vec![
-            ("0-5", "Set Stars"),
-            ("u/Backspace", "Unrate"),
-            ("Esc", "Cancel"),
+            ("0-5".to_string(), "Set Stars"),
+            ("u/Backspace".to_string(), "Unrate"),
+            ("Esc".to_string(), "Cancel"),
         ],
-        Mode::TextInput(kind) => match kind {
-            TextInputKind::NewTitle => vec![("Enter", "Next: System"), ("Esc", "Cancel")],
-            TextInputKind::NewSystem => vec![("Enter", "Create Entry"), ("Esc", "Cancel")],
-            TextInputKind::EditTitle => vec![("Enter", "Save"), ("Esc", "Cancel")],
-            TextInputKind::EditSystem => vec![("Enter", "Save"), ("Esc", "Cancel")],
-            TextInputKind::EditHours => vec![("Enter", "Save"), ("Esc", "Cancel")],
-            TextInputKind::EditReleaseDate => vec![("Enter", "Save"), ("Esc", "Cancel")],
-            TextInputKind::ImportCoverArt => vec![("Enter", "Import"), ("Esc", "Cancel")],
-        },
+        Mode::TextInput(kind) => {
+            let enter_label = match kind {
+                TextInputKind::NewTitle => "Next: System",
+                TextInputKind::NewSystem => "Create Entry",
+                TextInputKind::ImportCoverArt => "Import",
+                _ => "Save",
+            };
+            vec![
+                ("Enter".to_string(), enter_label),
+                ("Esc".to_string(), "Cancel"),
+            ]
+        }
     }
 }
 
@@ -222,7 +241,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         ))
     } else {
         let mut spans = Vec::new();
-        for (i, (key, action)) in footer_hints(&app.mode).into_iter().enumerate() {
+        for (i, (key, action)) in footer_hints(&app.mode, &app.keybindings).into_iter().enumerate() {
             if i > 0 {
                 spans.push(Span::raw("  "));
             }
