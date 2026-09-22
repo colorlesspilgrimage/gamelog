@@ -53,16 +53,31 @@ impl GamelogApp {
         }
     }
 
-    /// Cover fetches complete on a background thread; rather than track
-    /// exactly which entry changed, just drop the whole texture cache once a
-    /// fetch finishes and let the next frame reload lazily.
+    /// Cover fetches complete on a background thread; drop the cached
+    /// texture for each entry that just received new cover art so the next
+    /// frame reloads it, plus (as a safety net) the whole cache once a bulk
+    /// fetch finishes.
     fn poll_and_invalidate(&mut self) {
         let was_fetching = self.app.bulk_fetch_progress.is_some();
-        let result = self.app.poll_cover_fetch_results();
-        self.report(result);
+        match self.app.poll_cover_fetch_results() {
+            Ok(updated) => {
+                for id in updated {
+                    self.textures.remove(&id);
+                }
+            }
+            Err(err) => self.report(Err(err)),
+        }
         if was_fetching && self.app.bulk_fetch_progress.is_none() {
             self.textures.clear();
         }
+    }
+
+    /// Drops the cached texture for `entry_id`, if any, forcing the next
+    /// `cover_texture` call to reload it from disk. Used after any action
+    /// that may have changed an entry's cover art outside of a background
+    /// fetch (manual import) or removed the entry entirely (delete).
+    fn invalidate_texture(&mut self, entry_id: Uuid) {
+        self.textures.remove(&entry_id);
     }
 
     fn cover_texture(&mut self, ctx: &egui::Context, entry_id: Uuid) -> Option<egui::TextureHandle> {
@@ -326,8 +341,12 @@ impl GamelogApp {
             ui.label(format!("Delete '{title}'? This cannot be undone."));
             ui.horizontal(|ui| {
                 if ui.button("Delete").clicked() {
+                    let entry_id = self.app.selected_entry().map(|e| e.id);
                     let result = self.app.confirm_delete();
                     self.report(result);
+                    if let Some(id) = entry_id {
+                        self.invalidate_texture(id);
+                    }
                 }
                 if ui.button("Cancel").clicked() {
                     self.app.cancel_input();
@@ -395,14 +414,19 @@ impl GamelogApp {
                     && let Some(path) = rfd::FileDialog::new().pick_file()
                 {
                     self.app.input_buffer = path.display().to_string();
+                    let entry_id = self.app.selected_entry().map(|e| e.id);
                     let result = self.app.commit_import_cover();
                     self.report(result);
+                    if let Some(id) = entry_id {
+                        self.invalidate_texture(id);
+                    }
                 }
                 if ui.button("Cancel").clicked() {
                     self.app.cancel_input();
                 }
 
                 if submitted || ok_clicked {
+                    let entry_id = self.app.selected_entry().map(|e| e.id);
                     let result = match kind {
                         TextInputKind::NewTitle => {
                             self.app.submit_new_title();
@@ -416,6 +440,11 @@ impl GamelogApp {
                         TextInputKind::ImportCoverArt => self.app.commit_import_cover(),
                     };
                     self.report(result);
+                    if kind == TextInputKind::ImportCoverArt
+                        && let Some(id) = entry_id
+                    {
+                        self.invalidate_texture(id);
+                    }
                 }
             });
         });

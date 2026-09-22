@@ -781,12 +781,20 @@ impl App {
     }
 
     /// Drains any completed background fetches without blocking. Called
-    /// once per event loop tick.
-    pub fn poll_cover_fetch_results(&mut self) -> Result<()> {
+    /// once per event loop tick. Returns the ids of entries that received
+    /// new cover art, so a caller with its own image cache (the GUI) knows
+    /// which entries to invalidate.
+    pub fn poll_cover_fetch_results(&mut self) -> Result<Vec<Uuid>> {
+        let mut updated = Vec::new();
         while let Ok(result) = self.cover_fetch_rx.try_recv() {
+            let entry_id = result.entry_id;
+            let got_cover = matches!(result.outcome, Ok(Some(_)));
             self.handle_cover_fetch_result(result)?;
+            if got_cover {
+                updated.push(entry_id);
+            }
         }
-        Ok(())
+        Ok(updated)
     }
 
     fn handle_cover_fetch_result(&mut self, result: CoverFetchResult) -> Result<()> {
