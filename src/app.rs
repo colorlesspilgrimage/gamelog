@@ -13,7 +13,7 @@ use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use uuid::Uuid;
 
 use crate::cover_fetch;
-use crate::entry::{Entry, Rating};
+use crate::entry::{Entry, Rating, SortKey};
 use crate::keybindings::Keybindings;
 use crate::settings::{CoverSource, Settings};
 use crate::storage::Library;
@@ -349,18 +349,19 @@ impl App {
     // --- Sorting ---
 
     pub fn cycle_sort_key(&mut self) {
-        self.settings.sort_key = self.settings.sort_key.next();
-        self.settings.sort_reversed = false;
-        self.apply_sort_change();
+        self.set_sort(self.settings.sort_key.next(), false);
     }
 
     pub fn toggle_sort_reversed(&mut self) {
-        self.settings.sort_reversed = !self.settings.sort_reversed;
-        self.apply_sort_change();
+        self.set_sort(self.settings.sort_key, !self.settings.sort_reversed);
     }
 
-    fn apply_sort_change(&mut self) {
+    /// Applies a sort order, keeping the selected entry selected, and
+    /// remembers it in settings.
+    pub fn set_sort(&mut self, key: SortKey, reversed: bool) {
         let selected = self.selected_entry().map(|e| e.id);
+        self.settings.sort_key = key;
+        self.settings.sort_reversed = reversed;
         self.reselect(selected);
         if let Err(err) = self.settings.save() {
             self.status_message = Some(format!("Failed to save sort order: {err}"));
@@ -372,6 +373,14 @@ impl App {
     /// Opens the search prompt, keeping any existing query so it can be refined.
     pub fn begin_search(&mut self) {
         self.mode = Mode::Searching;
+    }
+
+    /// Replaces the whole search query at once (the GUI's search box edits
+    /// it as a string rather than a keystroke at a time).
+    pub fn set_search_query(&mut self, query: String) {
+        let selected = self.selected_entry().map(|e| e.id);
+        self.search_query = query;
+        self.reselect(selected);
     }
 
     pub fn push_search_char(&mut self, c: char) {

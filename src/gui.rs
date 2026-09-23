@@ -6,6 +6,7 @@ use eframe::egui;
 use uuid::Uuid;
 
 use crate::app::{App, Filter, Mode, TextInputKind};
+use crate::entry::SortKey;
 use crate::keybindings::Keybindings;
 use crate::settings::{CoverSource, Settings};
 use crate::storage::Library;
@@ -104,7 +105,12 @@ impl GamelogApp {
             return;
         }
         let result = match self.app.mode.clone() {
-            Mode::Normal => self.app.quit(),
+            // As in the TUI, Esc clears an active search before it quits.
+            Mode::Normal | Mode::Searching if !self.app.search_query.is_empty() => {
+                self.app.clear_search();
+                Ok(())
+            }
+            Mode::Normal | Mode::Searching => self.app.quit(),
             Mode::EditingNotes => self.app.commit_notes(),
             Mode::ConfirmDelete | Mode::AwaitingRating | Mode::TextInput(_) => {
                 self.app.cancel_input();
@@ -153,6 +159,43 @@ impl GamelogApp {
                 }
             }
         });
+        ui.horizontal(|ui| {
+            ui.label("Search:");
+            let mut query = self.app.search_query.clone();
+            // Leave room for the Clear button rather than letting the field's
+            // default width push the resizable panel wider.
+            let width = (ui.available_width() - 50.0).max(60.0);
+            let response = ui.add(egui::TextEdit::singleline(&mut query).hint_text("Title").desired_width(width));
+            if response.changed() {
+                self.app.set_search_query(query);
+            }
+            // Plain text rather than a glyph: egui's default font lacks
+            // symbols like ✕ and arrows, which render as empty boxes.
+            if !self.app.search_query.is_empty() && ui.small_button("Clear").clicked() {
+                self.app.clear_search();
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Sort:");
+            let (current, reversed) = (self.app.settings.sort_key, self.app.settings.sort_reversed);
+            let mut chosen = current;
+            egui::ComboBox::from_id_salt("sort_combo")
+                .selected_text(current.label())
+                .show_ui(ui, |ui| {
+                    for key in SortKey::ALL {
+                        ui.selectable_value(&mut chosen, key, key.label());
+                    }
+                });
+            let reverse_clicked = ui
+                .selectable_label(reversed, "Reverse")
+                .on_hover_text("Reverse the sort order")
+                .clicked();
+            if chosen != current {
+                self.app.set_sort(chosen, false);
+            } else if reverse_clicked {
+                self.app.set_sort(current, !reversed);
+            }
+        });
         ui.separator();
 
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -171,7 +214,11 @@ impl GamelogApp {
                 })
                 .collect();
             if rows.is_empty() {
-                ui.weak("No entries yet — click Add below.");
+                if self.app.search_query.is_empty() {
+                    ui.weak("No entries yet — click Add below.");
+                } else {
+                    ui.weak("No titles match your search.");
+                }
             }
             for (idx, id, label) in rows {
                 if ui.selectable_label(selected_id == Some(id), label).clicked() {
@@ -288,6 +335,11 @@ impl GamelogApp {
                     .map(|d| d.format("%Y-%m-%d").to_string())
                     .unwrap_or_else(|| "Unknown".to_string());
                 ui.label(format!("Released: {release_date}"));
+                let last_played = entry
+                    .last_played
+                    .map(|t| t.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string())
+                    .unwrap_or_else(|| "Never".to_string());
+                ui.label(format!("Last played: {last_played}"));
             });
         });
 
@@ -303,7 +355,9 @@ impl GamelogApp {
             self.last_text_input_kind = None;
         }
         match self.app.mode.clone() {
-            Mode::Normal => {}
+            // Searching is the TUI's search prompt; the GUI's search box is
+            // always visible in the list panel instead, so there's no dialog.
+            Mode::Normal | Mode::Searching => {}
             Mode::EditingNotes => self.draw_notes_dialog(ctx),
             Mode::ConfirmDelete => self.draw_confirm_delete_dialog(ctx),
             Mode::AwaitingRating => self.draw_rating_dialog(ctx),
