@@ -1,4 +1,7 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -24,7 +27,12 @@ pub fn run(library: Library, keybindings: Keybindings, settings: Settings, first
     if first_run {
         app.mode = Mode::SetupChooseSource;
     }
-    let gui_app = GamelogApp { app, textures: HashMap::new(), last_text_input_kind: None };
+    let gui_app = GamelogApp {
+        app,
+        textures: HashMap::new(),
+        last_text_input_kind: None,
+        pending_file_dialog: None,
+    };
     eframe::run_native(
         "gamelog",
         eframe::NativeOptions::default(),
@@ -41,6 +49,30 @@ struct GamelogApp {
     /// focus for the new field instead of leaving it on the previous
     /// dialog's now-stale OK button.
     last_text_input_kind: Option<TextInputKind>,
+    /// A native file dialog that's currently open, and the channel its
+    /// chosen path (or `None` if cancelled) will arrive on.
+    pending_file_dialog: Option<(FileDialogPurpose, Receiver<Option<PathBuf>>)>,
+}
+
+/// What to do with the path a native file dialog returns.
+#[derive(Debug, Clone, Copy)]
+enum FileDialogPurpose {
+    /// Import cover art for this entry.
+    ImportCover(Uuid),
+    ImportCsv,
+    ExportCsv,
+}
+
+impl FileDialogPurpose {
+    fn dialog(self) -> rfd::FileDialog {
+        match self {
+            FileDialogPurpose::ImportCover(_) => rfd::FileDialog::new(),
+            FileDialogPurpose::ImportCsv => rfd::FileDialog::new().add_filter("CSV", &["csv"]),
+            FileDialogPurpose::ExportCsv => rfd::FileDialog::new()
+                .add_filter("CSV", &["csv"])
+                .set_file_name("gamelog-export.csv"),
+        }
+    }
 }
 
 impl GamelogApp {
@@ -70,6 +102,67 @@ impl GamelogApp {
         }
         if was_fetching && self.app.bulk_fetch_progress.is_none() {
             self.textures.clear();
+        }
+    }
+
+    /// Opens a native file dialog on a background thread. rfd's dialogs
+    /// block until closed, and blocking egui's update loop that long makes
+    /// the window stop repainting and the compositor flag it as not
+    /// responding. The result is picked up by `poll_file_dialog`.
+    fn open_file_dialog(&mut self, purpose: FileDialogPurpose) {
+        if self.pending_file_dialog.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let dialog = purpose.dialog();
+            let path = match purpose {
+                FileDialogPurpose::ExportCsv => dialog.save_file(),
+                FileDialogPurpose::ImportCover(_) | FileDialogPurpose::ImportCsv => dialog.pick_file(),
+            };
+            let _ = tx.send(path);
+        });
+        self.pending_file_dialog = Some((purpose, rx));
+    }
+
+    /// Acts on a file dialog's result once it arrives.
+    fn poll_file_dialog(&mut self) {
+        let Some((purpose, rx)) = &self.pending_file_dialog else {
+            return;
+        };
+        let purpose = *purpose;
+        let path = match rx.try_recv() {
+            Ok(path) => path,
+            Err(mpsc::TryRecvError::Empty) => return,
+            // The dialog thread died without answering; treat as cancelled.
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        };
+        self.pending_file_dialog = None;
+        let Some(path) = path else {
+            return;
+        };
+        match purpose {
+            FileDialogPurpose::ImportCover(entry_id) => {
+                // Only apply it if the import prompt is still open for the
+                // same entry; the user may have cancelled or moved on.
+                if self.app.mode == Mode::TextInput(TextInputKind::ImportCoverArt)
+                    && self.app.selected_entry().map(|e| e.id) == Some(entry_id)
+                {
+                    self.app.input_buffer = path.display().to_string();
+                    let result = self.app.commit_import_cover();
+                    self.report(result);
+                    self.invalidate_texture(entry_id);
+                }
+            }
+            FileDialogPurpose::ImportCsv => {
+                let result = self.app.import_csv(&path).map(|_| ());
+                self.report(result);
+            }
+            // The native save dialog confirms overwriting an existing file
+            // itself, so unlike the TUI's typed path this may replace one.
+            FileDialogPurpose::ExportCsv => {
+                self.app.export_csv(&path);
+            }
         }
     }
 
@@ -278,21 +371,12 @@ impl GamelogApp {
             if ui.button("Fetch All Covers").clicked() {
                 self.app.begin_fetch_all_covers();
             }
-            if ui.button("Import CSV...").clicked()
-                && let Some(path) = rfd::FileDialog::new().add_filter("CSV", &["csv"]).pick_file()
-            {
-                let result = self.app.import_csv(&path).map(|_| ());
-                self.report(result);
+            let dialog_open = self.pending_file_dialog.is_some();
+            if ui.add_enabled(!dialog_open, egui::Button::new("Import CSV...")).clicked() {
+                self.open_file_dialog(FileDialogPurpose::ImportCsv);
             }
-            // The native save dialog confirms overwriting an existing file
-            // itself, so unlike the TUI's typed path this may replace one.
-            if ui.button("Export CSV...").clicked()
-                && let Some(path) = rfd::FileDialog::new()
-                    .add_filter("CSV", &["csv"])
-                    .set_file_name("gamelog-export.csv")
-                    .save_file()
-            {
-                self.app.export_csv(&path);
+            if ui.add_enabled(!dialog_open, egui::Button::new("Export CSV...")).clicked() {
+                self.open_file_dialog(FileDialogPurpose::ExportCsv);
             }
         });
 
@@ -479,17 +563,12 @@ impl GamelogApp {
 
             ui.horizontal(|ui| {
                 let ok_clicked = ui.button("OK").clicked();
+                let dialog_open = self.pending_file_dialog.is_some();
                 if kind == TextInputKind::ImportCoverArt
-                    && ui.button("Browse...").clicked()
-                    && let Some(path) = rfd::FileDialog::new().pick_file()
+                    && ui.add_enabled(!dialog_open, egui::Button::new("Browse...")).clicked()
+                    && let Some(id) = self.app.selected_entry().map(|e| e.id)
                 {
-                    self.app.input_buffer = path.display().to_string();
-                    let entry_id = self.app.selected_entry().map(|e| e.id);
-                    let result = self.app.commit_import_cover();
-                    self.report(result);
-                    if let Some(id) = entry_id {
-                        self.invalidate_texture(id);
-                    }
+                    self.open_file_dialog(FileDialogPurpose::ImportCover(id));
                 }
                 if ui.button("Cancel").clicked() {
                     self.app.cancel_input();
@@ -592,6 +671,7 @@ impl GamelogApp {
 impl eframe::App for GamelogApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_and_invalidate();
+        self.poll_file_dialog();
 
         let ctx = ui.ctx().clone();
         if ctx.input(|i| i.viewport().close_requested()) {
