@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::entry::SortKey;
 use crate::paths::gamelog_dir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +41,9 @@ pub struct Settings {
     pub default_cover_source: CoverSource,
     pub steamgriddb_api_key: Option<String>,
     pub rawg_api_key: Option<String>,
+    /// Entry list ordering, remembered across runs.
+    pub sort_key: SortKey,
+    pub sort_reversed: bool,
 }
 
 impl Default for Settings {
@@ -48,6 +52,8 @@ impl Default for Settings {
             default_cover_source: CoverSource::Manual,
             steamgriddb_api_key: None,
             rawg_api_key: None,
+            sort_key: SortKey::Title,
+            sort_reversed: false,
         }
     }
 }

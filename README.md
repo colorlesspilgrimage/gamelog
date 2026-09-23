@@ -20,9 +20,10 @@ Track title, system, status, hours played, a 5-star rating, cover art, and freef
 
 ## Features
 
-- **Split-pane browsing** — a scrollable, alphabetized list on the left (toggle between all entries and a single system with `Tab`/`Shift+Tab`), and a detail pane on the right showing cover art, info, and notes for the selected entry.
-- **Full entry model** — title, system/platform, release date, status (*Want to Play* / *Playing* / *Played*), hours played, a 0–5 star rating, cover art, and freeform persistent notes.
-- **Play sessions** — press `t` to start a live timer when you sit down to play, and press it again when you stop; the elapsed time is added to that entry's hours automatically. A running session is always visible in the footer, even while you browse other entries, and is safely finalized if you quit mid-session.
+- **Split-pane browsing** — a scrollable list on the left (toggle between all entries and a single system with `Tab`/`Shift+Tab`), and a detail pane on the right showing cover art, info, and notes for the selected entry.
+- **Search and sort** — press `/` to filter the list by title as you type (case-insensitive), and `o` to sort by title, hours played, rating, release date, last played, or status (`O` reverses the order). Your chosen sort is remembered between runs; entries without a rating, release date, or play session always sink to the bottom.
+- **Full entry model** — title, system/platform, release date, status (*Want to Play* / *Playing* / *Played*), hours played, last played date, a 0–5 star rating, cover art, and freeform persistent notes.
+- **Play sessions** — press `t` to start a live timer when you sit down to play, and press it again when you stop; the elapsed time is added to that entry's hours automatically, and its *last played* date is updated. A running session is always visible in the footer, even while you browse other entries, and is safely finalized if you quit mid-session.
 - **Automatic cover art**, from either of two free APIs, or your own image files:
   - [SteamGridDB](https://www.steamgriddb.com/) — purpose-built box/grid art, best visual quality.
   - [RAWG.io](https://rawg.io/apidocs) — broader metadata coverage, banner-style images.
@@ -105,7 +106,9 @@ Shown contextually along the bottom of the screen at all times; the primary brow
 | `r` | Set rating |
 | `c` | Import cover art from a local file |
 | `F` | Fetch cover art for every entry that's missing one |
-| `q` (or `Esc`) | Quit |
+| `/` | Search by title (`Enter` to keep the search, `Esc` to clear it) |
+| `o` / `O` | Cycle the sort order / reverse it |
+| `q` (or `Esc`) | Quit (`Esc` clears an active search first) |
 
 ## License
 

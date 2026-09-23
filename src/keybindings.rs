@@ -26,6 +26,9 @@ pub struct Keybindings {
     pub edit_system: KeyCode,
     pub edit_release_date: KeyCode,
     pub fetch_all_covers: KeyCode,
+    pub search: KeyCode,
+    pub sort_next: KeyCode,
+    pub sort_reverse: KeyCode,
     pub quit: KeyCode,
 }
 
@@ -48,6 +51,9 @@ impl Default for Keybindings {
             edit_system: KeyCode::Char('p'),
             edit_release_date: KeyCode::Char('R'),
             fetch_all_covers: KeyCode::Char('F'),
+            search: KeyCode::Char('/'),
+            sort_next: KeyCode::Char('o'),
+            sort_reverse: KeyCode::Char('O'),
             quit: KeyCode::Char('q'),
         }
     }
@@ -81,6 +87,9 @@ edit_title = { Char = "T" }
 edit_system = { Char = "p" }
 edit_release_date = { Char = "R" }
 fetch_all_covers = { Char = "F" }
+search = { Char = "/" }
+sort_next = { Char = "o" }
+sort_reverse = { Char = "O" }
 quit = { Char = "q" }
 "#;
 
@@ -113,7 +122,7 @@ impl Keybindings {
         Ok((keybindings, warning))
     }
 
-    fn bindings(&self) -> [(&'static str, KeyCode); 17] {
+    fn bindings(&self) -> [(&'static str, KeyCode); 20] {
         [
             ("move_up", self.move_up),
             ("move_down", self.move_down),
@@ -131,6 +140,9 @@ impl Keybindings {
             ("edit_system", self.edit_system),
             ("edit_release_date", self.edit_release_date),
             ("fetch_all_covers", self.fetch_all_covers),
+            ("search", self.search),
+            ("sort_next", self.sort_next),
+            ("sort_reverse", self.sort_reverse),
             ("quit", self.quit),
         ]
     }

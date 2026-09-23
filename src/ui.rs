@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use chrono::Local;
+
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -33,12 +35,24 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Mode::SetupChooseSource => draw_setup_choose_source(frame),
         Mode::EnterApiKey { source, .. } => draw_enter_api_key(frame, app, source),
         Mode::CoverFetchChoice { tried, .. } => draw_cover_fetch_choice(frame, &tried),
-        Mode::Normal | Mode::EditingNotes => {}
+        Mode::Normal | Mode::EditingNotes | Mode::Searching => {}
     }
 }
 
 fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
+    let searching = matches!(app.mode, Mode::Searching);
+    let area = if searching || !app.search_query.is_empty() {
+        let [search_area, list_area] =
+            Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(area);
+        draw_search_bar(frame, app, searching, search_area);
+        list_area
+    } else {
+        area
+    };
+
+    let arrow = if app.settings.sort_reversed { "↑" } else { "↓" };
     let title = format!(" {} ", app.filter.label());
+    let sort_title = format!(" Sort: {} {arrow} ", app.settings.sort_key.label());
     let items: Vec<ListItem> = app
         .visible_entries()
         .iter()
@@ -52,10 +66,32 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().title(title).borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(title)
+                .title_bottom(Line::from(sort_title).right_aligned())
+                .borders(Borders::ALL),
+        )
         .highlight_style(Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED));
 
     frame.render_stateful_widget(list, area, &mut app.list_state);
+}
+
+fn draw_search_bar(frame: &mut Frame, app: &App, searching: bool, area: Rect) {
+    let border_style = if searching {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
+    let block = Block::default()
+        .title(" Search ")
+        .borders(Borders::ALL)
+        .border_style(border_style);
+    let inner = block.inner(area);
+    frame.render_widget(Paragraph::new(app.search_query.as_str()).block(block), area);
+    if searching {
+        frame.set_cursor_position((inner.x + app.search_query.chars().count() as u16, inner.y));
+    }
 }
 
 fn status_glyph(status: Status) -> Span<'static> {
@@ -69,7 +105,7 @@ fn status_glyph(status: Status) -> Span<'static> {
 fn draw_detail(frame: &mut Frame, app: &mut App, area: Rect) {
     let [cover_area, info_area, notes_area] = Layout::vertical([
         Constraint::Percentage(45),
-        Constraint::Length(8),
+        Constraint::Length(9),
         Constraint::Min(5),
     ])
     .areas(area);
@@ -120,6 +156,11 @@ fn draw_info(frame: &mut Frame, entry: &Entry, session_elapsed: Option<Duration>
         .map(|r| stars(r.stars()))
         .unwrap_or_else(|| "Unrated".to_string());
 
+    let last_played = entry
+        .last_played
+        .map(|t| t.with_timezone(&Local).format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "Never".to_string());
+
     let status_style = match entry.status {
         Status::WantToPlay => Style::default().fg(Color::DarkGray),
         Status::Playing => Style::default().fg(Color::Yellow),
@@ -148,6 +189,7 @@ fn draw_info(frame: &mut Frame, entry: &Entry, session_elapsed: Option<Duration>
             None => Line::from(format!("Hours: {:.1}", entry.hours)),
         },
         Line::from(format!("Rating: {rating}")),
+        Line::from(format!("Last played: {last_played}")),
     ];
 
     let info = Paragraph::new(lines).block(Block::default().title(" Info ").borders(Borders::ALL));
@@ -231,7 +273,17 @@ fn footer_hints(mode: &Mode, kb: &Keybindings) -> Vec<(String, &'static str)> {
             (key_label(kb.set_rating), "Rating"),
             (key_label(kb.import_cover), "Cover Art"),
             (key_label(kb.fetch_all_covers), "Fetch All Covers"),
+            (key_label(kb.search), "Search"),
+            (
+                format!("{}/{}", key_label(kb.sort_next), key_label(kb.sort_reverse)),
+                "Sort/Reverse",
+            ),
             (key_label(kb.quit), "Quit"),
+        ],
+        Mode::Searching => vec![
+            ("Enter".to_string(), "Done"),
+            ("Up/Down".to_string(), "Navigate"),
+            ("Esc".to_string(), "Clear Search"),
         ],
         Mode::EditingNotes => vec![
             ("Enter".to_string(), "Newline"),

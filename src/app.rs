@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use chrono::Utc;
 use image::ImageReader;
 use ratatui::widgets::ListState;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
@@ -76,6 +77,8 @@ pub enum Mode {
     ConfirmDelete,
     AwaitingRating,
     TextInput(TextInputKind),
+    /// Typing a title search; the list filters live as the query changes.
+    Searching,
     /// First-run wizard: choose a default cover art source.
     SetupChooseSource,
     /// Prompting for an API key. `entry_id: None` means this is part of the
@@ -163,6 +166,8 @@ fn spawn_cover_fetch_workers(
 pub struct App {
     pub library: Library,
     pub filter: Filter,
+    /// Title search applied on top of `filter`; empty means no search.
+    pub search_query: String,
     pub list_state: ListState,
     pub mode: Mode,
     pub input_buffer: String,
@@ -191,6 +196,7 @@ impl App {
         let mut app = Self {
             library,
             filter: Filter::All,
+            search_query: String::new(),
             list_state: ListState::default(),
             mode: Mode::Normal,
             input_buffer: String::new(),
@@ -225,7 +231,8 @@ impl App {
         systems
     }
 
-    /// Entries visible under the current filter, sorted by title.
+    /// Entries visible under the current system filter and title search,
+    /// in the configured sort order.
     pub fn visible_entries(&self) -> Vec<&Entry> {
         let mut entries: Vec<&Entry> = self
             .library
@@ -235,9 +242,22 @@ impl App {
                 Filter::All => true,
                 Filter::System(system) => &e.system == system,
             })
+            .filter(|e| e.matches_query(&self.search_query))
             .collect();
-        entries.sort_by(|a, b| a.title.cmp(&b.title));
+        let (key, reversed) = (self.settings.sort_key, self.settings.sort_reversed);
+        entries.sort_by(|a, b| key.compare(a, b, reversed));
         entries
+    }
+
+    /// Re-selects `id` after the visible list is reordered or re-filtered,
+    /// falling back to the first entry if it's no longer visible.
+    fn reselect(&mut self, id: Option<Uuid>) {
+        let idx = id.and_then(|id| self.visible_entries().iter().position(|e| e.id == id));
+        match idx {
+            Some(idx) => self.list_state.select(Some(idx)),
+            None if self.visible_entries().is_empty() => self.list_state.select(None),
+            None => self.list_state.select(Some(0)),
+        }
     }
 
     pub fn selected_entry(&self) -> Option<&Entry> {
@@ -255,10 +275,16 @@ impl App {
         }
     }
 
-    fn select_by_id(&mut self, id: Uuid) {
-        if let Some(idx) = self.visible_entries().iter().position(|e| e.id == id) {
-            self.list_state.select(Some(idx));
+    /// Selects `id`, first clearing the search and then the system filter
+    /// if either would hide it, so a just-added entry is never invisible.
+    fn reveal(&mut self, id: Uuid) {
+        if !self.visible_entries().iter().any(|e| e.id == id) {
+            self.search_query.clear();
         }
+        if !self.visible_entries().iter().any(|e| e.id == id) {
+            self.filter = Filter::All;
+        }
+        self.reselect(Some(id));
     }
 
     pub fn select_next(&mut self) {
@@ -318,6 +344,59 @@ impl App {
         if self.list_state.selected().is_none() && !self.visible_entries().is_empty() {
             self.list_state.select(Some(0));
         }
+    }
+
+    // --- Sorting ---
+
+    pub fn cycle_sort_key(&mut self) {
+        self.settings.sort_key = self.settings.sort_key.next();
+        self.settings.sort_reversed = false;
+        self.apply_sort_change();
+    }
+
+    pub fn toggle_sort_reversed(&mut self) {
+        self.settings.sort_reversed = !self.settings.sort_reversed;
+        self.apply_sort_change();
+    }
+
+    fn apply_sort_change(&mut self) {
+        let selected = self.selected_entry().map(|e| e.id);
+        self.reselect(selected);
+        if let Err(err) = self.settings.save() {
+            self.status_message = Some(format!("Failed to save sort order: {err}"));
+        }
+    }
+
+    // --- Search ---
+
+    /// Opens the search prompt, keeping any existing query so it can be refined.
+    pub fn begin_search(&mut self) {
+        self.mode = Mode::Searching;
+    }
+
+    pub fn push_search_char(&mut self, c: char) {
+        let selected = self.selected_entry().map(|e| e.id);
+        self.search_query.push(c);
+        self.reselect(selected);
+    }
+
+    pub fn pop_search_char(&mut self) {
+        let selected = self.selected_entry().map(|e| e.id);
+        self.search_query.pop();
+        self.reselect(selected);
+    }
+
+    /// Leaves the search prompt, keeping the query applied to the list.
+    pub fn commit_search(&mut self) {
+        self.mode = Mode::Normal;
+    }
+
+    /// Clears the search entirely, keeping the selected entry selected.
+    pub fn clear_search(&mut self) {
+        let selected = self.selected_entry().map(|e| e.id);
+        self.search_query.clear();
+        self.mode = Mode::Normal;
+        self.reselect(selected);
     }
 
     pub fn clear_status_message(&mut self) {
@@ -391,7 +470,7 @@ impl App {
         self.library.add(entry);
         self.library.save()?;
         self.input_buffer.clear();
-        self.select_by_id(id);
+        self.reveal(id);
 
         self.mode = Mode::Normal;
         match self.settings.default_cover_source {
@@ -433,8 +512,8 @@ impl App {
             self.library.save()?;
             self.input_buffer.clear();
             self.mode = Mode::Normal;
-            // Renaming can move the entry to a new position in the sorted list.
-            self.select_by_id(id);
+            // Renaming can move the entry in the sorted list, or out of the search.
+            self.reselect(Some(id));
         }
         Ok(())
     }
@@ -460,7 +539,7 @@ impl App {
             self.input_buffer.clear();
             self.mode = Mode::Normal;
             // Changing the system may remove the entry from a system-filtered view.
-            self.clamp_selection();
+            self.reselect(Some(id));
         }
         Ok(())
     }
@@ -495,6 +574,7 @@ impl App {
                 entry.release_date = parsed;
             }
             self.library.save()?;
+            self.reselect(Some(id));
         }
         self.input_buffer.clear();
         self.mode = Mode::Normal;
@@ -531,6 +611,7 @@ impl App {
                 entry.status = entry.status.next();
             }
             self.library.save()?;
+            self.reselect(Some(id));
         }
         Ok(())
     }
@@ -552,6 +633,7 @@ impl App {
                         entry.hours = hours;
                     }
                     self.library.save()?;
+                    self.reselect(Some(id));
                 }
                 self.input_buffer.clear();
                 self.mode = Mode::Normal;
@@ -595,16 +677,20 @@ impl App {
     }
 
     fn stop_session(&mut self, session: ActiveSession) -> Result<()> {
+        let selected = self.selected_entry().map(|e| e.id);
         let elapsed_hours = session.started_at.elapsed().as_secs_f32() / 3600.0;
         let mut title = String::new();
         let mut total_hours = 0.0;
         if let Some(entry) = self.library.get_mut(session.entry_id) {
             entry.hours += elapsed_hours;
+            entry.last_played = Some(Utc::now());
             title = entry.title.clone();
             total_hours = entry.hours;
         }
         self.active_session = None;
         self.library.save()?;
+        // The added hours and new last-played time can reorder the list.
+        self.reselect(selected);
         self.status_message = Some(format!(
             "Session ended: +{elapsed_hours:.2}h to {title} (total {total_hours:.1}h)."
         ));
@@ -632,6 +718,7 @@ impl App {
                 entry.rating = Some(Rating::new(stars));
             }
             self.library.save()?;
+            self.reselect(Some(id));
         }
         self.mode = Mode::Normal;
         Ok(())
@@ -643,6 +730,7 @@ impl App {
                 entry.rating = None;
             }
             self.library.save()?;
+            self.reselect(Some(id));
         }
         self.mode = Mode::Normal;
         Ok(())
@@ -861,7 +949,7 @@ impl App {
     }
 
     pub fn choose_manual_cover(&mut self, entry_id: Uuid) {
-        self.select_by_id(entry_id);
+        self.reveal(entry_id);
         self.input_buffer.clear();
         self.mode = Mode::TextInput(TextInputKind::ImportCoverArt);
     }
