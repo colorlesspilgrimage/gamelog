@@ -32,6 +32,7 @@ pub fn run(library: Library, keybindings: Keybindings, settings: Settings, first
         textures: HashMap::new(),
         last_text_input_kind: None,
         pending_file_dialog: None,
+        egui_owned_escape: false,
     };
     eframe::run_native(
         "gamelog",
@@ -52,6 +53,12 @@ struct GamelogApp {
     /// A native file dialog that's currently open, and the channel its
     /// chosen path (or `None` if cancelled) will arrive on.
     pending_file_dialog: Option<(FileDialogPurpose, Receiver<Option<PathBuf>>)>,
+    /// Whether, as of the end of the last frame, a text field had focus or a
+    /// dropdown was open, in which case Esc belongs to egui (leaving the
+    /// field / closing the dropdown) rather than quitting. Recorded at the
+    /// end of the frame because egui clears keyboard focus on Esc before the
+    /// next frame's `ui` even starts.
+    egui_owned_escape: bool,
 }
 
 /// What to do with the path a native file dialog returns.
@@ -192,7 +199,9 @@ impl GamelogApp {
     }
 
     /// Mirrors `main.rs`'s per-mode Escape handling, so the key does the same
-    /// thing in both front ends.
+    /// thing in both front ends. In normal mode it quits (the window is
+    /// then closed in `ui`), except when egui itself has a use for the
+    /// key: closing an open dropdown or leaving a focused text field.
     fn handle_escape(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             return;
@@ -203,6 +212,7 @@ impl GamelogApp {
                 self.app.clear_search();
                 Ok(())
             }
+            Mode::Normal | Mode::Searching if self.egui_owned_escape => Ok(()),
             Mode::Normal | Mode::Searching => self.app.quit(),
             Mode::EditingNotes => self.app.commit_notes(),
             Mode::ConfirmDelete | Mode::AwaitingRating | Mode::TextInput(_) => {
@@ -676,9 +686,19 @@ impl eframe::App for GamelogApp {
         let ctx = ui.ctx().clone();
         if ctx.input(|i| i.viewport().close_requested()) {
             let result = self.app.quit();
+            if result.is_err() {
+                // Finalizing the play session failed to save; keep the
+                // window open so the error is visible and nothing is lost.
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            }
             self.report(result);
         }
         self.handle_escape(&ctx);
+        // `App::quit` only sets a flag (the TUI's event loop checks it), so
+        // the GUI has to act on it by closing the window itself.
+        if self.app.should_quit {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
 
         egui::Panel::left("entry_list")
             .resizable(true)
@@ -690,6 +710,8 @@ impl eframe::App for GamelogApp {
         egui::CentralPanel::default().show(ui, |ui| self.draw_detail(&ctx, ui));
 
         self.draw_dialog(&ctx);
+
+        self.egui_owned_escape = egui::Popup::is_any_open(&ctx) || ctx.text_edit_focused();
 
         // Keep the session timer and any in-flight fetch progress live even
         // with no user input, mirroring the TUI's fixed-interval redraw loop.

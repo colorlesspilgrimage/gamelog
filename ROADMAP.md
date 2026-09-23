@@ -85,6 +85,10 @@ itself rather than either rendering layer.
 - Native file dialogs (CSV and cover art Browse...) run on a background
   thread, so the window keeps repainting while one is open instead of
   being flagged "Application Not Responding" by the compositor.
+- Esc in normal mode closes the window like the TUI's quit (finalizing any
+  running play session first), except when it's closing an open dropdown
+  or leaving a focused text field. If finalizing the session fails to
+  save, a window-close request is cancelled so the error stays visible.
 
 ## Remaining
 
@@ -103,11 +107,6 @@ itself rather than either rendering layer.
 
 ### GUI
 
-- **Bug (needs a decision)**: in normal mode, Esc calls `App::quit()`, but
-  the GUI never checks `should_quit`, so the window stays open. Since
-  `quit()` finalizes any running play session, Esc silently stops the
-  session timer. Either Esc should close the window (like the TUI), or it
-  should do nothing in normal mode.
 - **Minor**: `draw_api_key_dialog`'s focus handling uses a simpler "focus if
   nothing else is focused" check rather than the discriminant-tracking fix
   applied to the general text-input dialog. In the rare case of two
