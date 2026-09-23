@@ -1,5 +1,7 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -13,8 +15,10 @@ use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use uuid::Uuid;
 
 use crate::cover_fetch;
-use crate::entry::{Entry, Rating};
+use crate::csv_io;
+use crate::entry::{Entry, Rating, SortKey};
 use crate::keybindings::Keybindings;
+use crate::paths::expand_tilde;
 use crate::settings::{CoverSource, Settings};
 use crate::storage::Library;
 
@@ -42,6 +46,8 @@ pub enum TextInputKind {
     EditHours,
     EditReleaseDate,
     ImportCoverArt,
+    ExportCsv,
+    ImportCsv,
 }
 
 impl TextInputKind {
@@ -54,6 +60,8 @@ impl TextInputKind {
             TextInputKind::EditHours => " Edit Hours ",
             TextInputKind::EditReleaseDate => " Edit Release Date ",
             TextInputKind::ImportCoverArt => " Import Cover Art ",
+            TextInputKind::ExportCsv => " Export Library to CSV ",
+            TextInputKind::ImportCsv => " Import Entries from CSV ",
         }
     }
 
@@ -66,6 +74,8 @@ impl TextInputKind {
             TextInputKind::EditHours => "Enter hours played:",
             TextInputKind::EditReleaseDate => "Enter date as YYYY-MM-DD (blank to clear):",
             TextInputKind::ImportCoverArt => "Enter path to an image file:",
+            TextInputKind::ExportCsv => "Save the whole library as (a new file):",
+            TextInputKind::ImportCsv => "Enter path to a CSV file:",
         }
     }
 }
@@ -265,7 +275,7 @@ impl App {
         self.list_state.selected().and_then(|i| entries.get(i).copied())
     }
 
-    fn clamp_selection(&mut self) {
+    pub fn clamp_selection(&mut self) {
         let len = self.visible_entries().len();
         if len == 0 {
             self.list_state.select(None);
@@ -349,18 +359,19 @@ impl App {
     // --- Sorting ---
 
     pub fn cycle_sort_key(&mut self) {
-        self.settings.sort_key = self.settings.sort_key.next();
-        self.settings.sort_reversed = false;
-        self.apply_sort_change();
+        self.set_sort(self.settings.sort_key.next(), false);
     }
 
     pub fn toggle_sort_reversed(&mut self) {
-        self.settings.sort_reversed = !self.settings.sort_reversed;
-        self.apply_sort_change();
+        self.set_sort(self.settings.sort_key, !self.settings.sort_reversed);
     }
 
-    fn apply_sort_change(&mut self) {
+    /// Applies a sort order, keeping the selected entry selected, and
+    /// remembers it in settings.
+    pub fn set_sort(&mut self, key: SortKey, reversed: bool) {
         let selected = self.selected_entry().map(|e| e.id);
+        self.settings.sort_key = key;
+        self.settings.sort_reversed = reversed;
         self.reselect(selected);
         if let Err(err) = self.settings.save() {
             self.status_message = Some(format!("Failed to save sort order: {err}"));
@@ -372,6 +383,14 @@ impl App {
     /// Opens the search prompt, keeping any existing query so it can be refined.
     pub fn begin_search(&mut self) {
         self.mode = Mode::Searching;
+    }
+
+    /// Replaces the whole search query at once (the GUI's search box edits
+    /// it as a string rather than a keystroke at a time).
+    pub fn set_search_query(&mut self, query: String) {
+        let selected = self.selected_entry().map(|e| e.id);
+        self.search_query = query;
+        self.reselect(selected);
     }
 
     pub fn push_search_char(&mut self, c: char) {
@@ -772,6 +791,117 @@ impl App {
         Ok(())
     }
 
+    // --- CSV import/export ---
+
+    pub fn begin_export_csv(&mut self) {
+        self.input_buffer = "~/gamelog-export.csv".to_string();
+        self.mode = Mode::TextInput(TextInputKind::ExportCsv);
+    }
+
+    /// Exports to the typed path. Never overwrites: a typed path can't ask
+    /// for confirmation the way a native save dialog does.
+    pub fn commit_export_csv(&mut self) {
+        let path = expand_tilde(&self.input_buffer);
+        if path.exists() {
+            self.status_message = Some(format!(
+                "{} already exists; choose a different name.",
+                path.display()
+            ));
+            return;
+        }
+        if self.export_csv(&path) {
+            self.input_buffer.clear();
+            self.mode = Mode::Normal;
+        }
+    }
+
+    /// Writes every entry in the library (regardless of the current filter
+    /// or search) to `path` as CSV, in title order, replacing any existing
+    /// file. Reports the outcome as a status message; returns whether it
+    /// succeeded.
+    pub fn export_csv(&mut self, path: &Path) -> bool {
+        let mut entries: Vec<&Entry> = self.library.entries().iter().collect();
+        entries.sort_by(|a, b| SortKey::Title.compare(a, b, false));
+        let mut buffer = Vec::new();
+        let result = csv_io::write_entries(&entries, &mut buffer)
+            .and_then(|()| Ok(std::fs::write(path, buffer)?));
+        self.status_message = Some(match &result {
+            Ok(()) => format!("Exported {} entries to {}.", entries.len(), path.display()),
+            Err(err) => format!("Export failed: {err}"),
+        });
+        result.is_ok()
+    }
+
+    pub fn begin_import_csv(&mut self) {
+        self.input_buffer.clear();
+        self.mode = Mode::TextInput(TextInputKind::ImportCsv);
+    }
+
+    pub fn commit_import_csv(&mut self) -> Result<()> {
+        let path = expand_tilde(&self.input_buffer);
+        if !path.is_file() {
+            self.status_message = Some(format!("No such file: {}", path.display()));
+            return Ok(());
+        }
+        if self.import_csv(&path)? {
+            self.input_buffer.clear();
+            self.mode = Mode::Normal;
+        }
+        Ok(())
+    }
+
+    /// Adds every valid row of the CSV at `path` as a new entry, skipping
+    /// rows whose title and system (ignoring case) match an entry already in
+    /// the library or earlier in the same file, so re-importing a file (or
+    /// importing an export of this same library) doesn't duplicate anything.
+    /// Reports a summary as a status message; returns whether the file
+    /// could be read at all.
+    pub fn import_csv(&mut self, path: &Path) -> Result<bool> {
+        let parsed = match File::open(path)
+            .map_err(anyhow::Error::from)
+            .and_then(|file| csv_io::read_entries(BufReader::new(file)))
+        {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                self.status_message = Some(format!("Import failed: {err:#}"));
+                return Ok(false);
+            }
+        };
+
+        let key = |e: &Entry| (e.title.to_lowercase(), e.system.to_lowercase());
+        let mut seen: std::collections::HashSet<_> =
+            self.library.entries().iter().map(key).collect();
+        let (mut imported, mut duplicates) = (0, 0);
+        for entry in parsed.entries {
+            if seen.insert(key(&entry)) {
+                self.library.add(entry);
+                imported += 1;
+            } else {
+                duplicates += 1;
+            }
+        }
+        if imported > 0 {
+            self.library.save()?;
+        }
+        let selected = self.selected_entry().map(|e| e.id);
+        self.reselect(selected);
+
+        let mut message = format!("Imported {imported} entries");
+        if duplicates > 0 {
+            message.push_str(&format!(", skipped {duplicates} already in the library"));
+        }
+        if let Some((line, reason)) = parsed.bad_rows.first() {
+            let count = parsed.bad_rows.len();
+            let rows = if count == 1 { "row" } else { "rows" };
+            message.push_str(&format!(
+                "; {count} bad {rows} not imported (first: line {line}, {reason})"
+            ));
+        }
+        message.push('.');
+        self.status_message = Some(message);
+        Ok(true)
+    }
+
     /// Cancels whatever text input / confirmation / rating prompt is active
     /// and returns to normal browsing.
     pub fn cancel_input(&mut self) {
@@ -869,12 +999,20 @@ impl App {
     }
 
     /// Drains any completed background fetches without blocking. Called
-    /// once per event loop tick.
-    pub fn poll_cover_fetch_results(&mut self) -> Result<()> {
+    /// once per event loop tick. Returns the ids of entries that received
+    /// new cover art, so a caller with its own image cache (the GUI) knows
+    /// which entries to invalidate.
+    pub fn poll_cover_fetch_results(&mut self) -> Result<Vec<Uuid>> {
+        let mut updated = Vec::new();
         while let Ok(result) = self.cover_fetch_rx.try_recv() {
+            let entry_id = result.entry_id;
+            let got_cover = matches!(result.outcome, Ok(Some(_)));
             self.handle_cover_fetch_result(result)?;
+            if got_cover {
+                updated.push(entry_id);
+            }
         }
-        Ok(())
+        Ok(updated)
     }
 
     fn handle_cover_fetch_result(&mut self, result: CoverFetchResult) -> Result<()> {

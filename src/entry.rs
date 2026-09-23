@@ -111,6 +111,16 @@ pub enum SortKey {
 }
 
 impl SortKey {
+    /// Every sort key, in cycling order, for pickers that list them all.
+    pub const ALL: [SortKey; 6] = [
+        SortKey::Title,
+        SortKey::Hours,
+        SortKey::Rating,
+        SortKey::ReleaseDate,
+        SortKey::LastPlayed,
+        SortKey::Status,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             SortKey::Title => "Title",

@@ -1,6 +1,8 @@
 mod app;
 mod cover_fetch;
+mod csv_io;
 mod entry;
+mod gui;
 mod keybindings;
 mod paths;
 mod settings;
@@ -24,6 +26,10 @@ fn main() -> Result<()> {
     let loaded_settings = Settings::load()?;
     let first_run = loaded_settings.is_none();
     let settings = loaded_settings.unwrap_or_default();
+
+    if std::env::args().any(|arg| arg == "--gui") {
+        return gui::run(library, keybindings, settings, first_run);
+    }
 
     let terminal = ratatui::init();
     // Must run after entering the alternate screen but before reading events.
@@ -92,6 +98,8 @@ fn run(mut terminal: ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                         code if code == kb.search => app.begin_search(),
                         code if code == kb.sort_next => app.cycle_sort_key(),
                         code if code == kb.sort_reverse => app.toggle_sort_reversed(),
+                        code if code == kb.export_csv => app.begin_export_csv(),
+                        code if code == kb.import_csv => app.begin_import_csv(),
                         _ => {}
                     }
                 }
@@ -143,6 +151,8 @@ fn run(mut terminal: ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                         TextInputKind::EditHours => app.commit_hours()?,
                         TextInputKind::EditReleaseDate => app.commit_release_date()?,
                         TextInputKind::ImportCoverArt => app.commit_import_cover()?,
+                        TextInputKind::ExportCsv => app.commit_export_csv(),
+                        TextInputKind::ImportCsv => app.commit_import_csv()?,
                     },
                     _ => {}
                 },

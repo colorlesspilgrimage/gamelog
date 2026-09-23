@@ -29,6 +29,8 @@ pub struct Keybindings {
     pub search: KeyCode,
     pub sort_next: KeyCode,
     pub sort_reverse: KeyCode,
+    pub export_csv: KeyCode,
+    pub import_csv: KeyCode,
     pub quit: KeyCode,
 }
 
@@ -54,6 +56,8 @@ impl Default for Keybindings {
             search: KeyCode::Char('/'),
             sort_next: KeyCode::Char('o'),
             sort_reverse: KeyCode::Char('O'),
+            export_csv: KeyCode::Char('E'),
+            import_csv: KeyCode::Char('I'),
             quit: KeyCode::Char('q'),
         }
     }
@@ -90,6 +94,8 @@ fetch_all_covers = { Char = "F" }
 search = { Char = "/" }
 sort_next = { Char = "o" }
 sort_reverse = { Char = "O" }
+export_csv = { Char = "E" }
+import_csv = { Char = "I" }
 quit = { Char = "q" }
 "#;
 
@@ -122,7 +128,7 @@ impl Keybindings {
         Ok((keybindings, warning))
     }
 
-    fn bindings(&self) -> [(&'static str, KeyCode); 20] {
+    fn bindings(&self) -> [(&'static str, KeyCode); 22] {
         [
             ("move_up", self.move_up),
             ("move_down", self.move_down),
@@ -143,6 +149,8 @@ impl Keybindings {
             ("search", self.search),
             ("sort_next", self.sort_next),
             ("sort_reverse", self.sort_reverse),
+            ("export_csv", self.export_csv),
+            ("import_csv", self.import_csv),
             ("quit", self.quit),
         ]
     }

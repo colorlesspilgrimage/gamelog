@@ -1,0 +1,720 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
+use std::time::Duration;
+
+use anyhow::Result;
+use eframe::egui;
+use uuid::Uuid;
+
+use crate::app::{App, Filter, Mode, TextInputKind};
+use crate::entry::SortKey;
+use crate::keybindings::Keybindings;
+use crate::settings::{CoverSource, Settings};
+use crate::storage::Library;
+use crate::ui::{format_duration, stars};
+
+/// Launches the egui-based GUI as an alternative to the terminal UI. It
+/// shares the same `App` state machine as the TUI (add/edit/delete, cover
+/// art fetching, sessions, the first-run wizard, ...) so the two front ends
+/// never drift in behavior; only the rendering and input handling differ.
+pub fn run(library: Library, keybindings: Keybindings, settings: Settings, first_run: bool) -> Result<()> {
+    // The picker is only ever used for ratatui's terminal image protocols;
+    // the GUI renders cover art itself via egui textures, so any picker works.
+    let picker = ratatui_image::picker::Picker::halfblocks();
+    let mut app = App::new(library, picker, keybindings, settings);
+    if first_run {
+        app.mode = Mode::SetupChooseSource;
+    }
+    let gui_app = GamelogApp {
+        app,
+        textures: HashMap::new(),
+        last_text_input_kind: None,
+        pending_file_dialog: None,
+        egui_owned_escape: false,
+    };
+    eframe::run_native(
+        "gamelog",
+        eframe::NativeOptions::default(),
+        Box::new(|_cc| Ok(Box::new(gui_app))),
+    )
+    .map_err(|err| anyhow::anyhow!("failed to launch GUI: {err}"))
+}
+
+struct GamelogApp {
+    app: App,
+    textures: HashMap<Uuid, Option<egui::TextureHandle>>,
+    /// The `TextInputKind` last focused, so switching from one text-input
+    /// dialog straight into another (e.g. new entry's title -> system) grabs
+    /// focus for the new field instead of leaving it on the previous
+    /// dialog's now-stale OK button.
+    last_text_input_kind: Option<TextInputKind>,
+    /// A native file dialog that's currently open, and the channel its
+    /// chosen path (or `None` if cancelled) will arrive on.
+    pending_file_dialog: Option<(FileDialogPurpose, Receiver<Option<PathBuf>>)>,
+    /// Whether, as of the end of the last frame, a text field had focus or a
+    /// dropdown was open, in which case Esc belongs to egui (leaving the
+    /// field / closing the dropdown) rather than quitting. Recorded at the
+    /// end of the frame because egui clears keyboard focus on Esc before the
+    /// next frame's `ui` even starts.
+    egui_owned_escape: bool,
+}
+
+/// What to do with the path a native file dialog returns.
+#[derive(Debug, Clone, Copy)]
+enum FileDialogPurpose {
+    /// Import cover art for this entry.
+    ImportCover(Uuid),
+    ImportCsv,
+    ExportCsv,
+}
+
+impl FileDialogPurpose {
+    fn dialog(self) -> rfd::FileDialog {
+        match self {
+            FileDialogPurpose::ImportCover(_) => rfd::FileDialog::new(),
+            FileDialogPurpose::ImportCsv => rfd::FileDialog::new().add_filter("CSV", &["csv"]),
+            FileDialogPurpose::ExportCsv => rfd::FileDialog::new()
+                .add_filter("CSV", &["csv"])
+                .set_file_name("gamelog-export.csv"),
+        }
+    }
+}
+
+impl GamelogApp {
+    /// Surfaces a fallible `App` action's error as a status message instead
+    /// of unwinding: unlike the TUI's event loop, egui's `ui()` can't
+    /// propagate a `Result`, and a save failure shouldn't take the whole
+    /// window down with it.
+    fn report(&mut self, result: Result<()>) {
+        if let Err(err) = result {
+            self.app.status_message = Some(format!("Error: {err}"));
+        }
+    }
+
+    /// Cover fetches complete on a background thread; drop the cached
+    /// texture for each entry that just received new cover art so the next
+    /// frame reloads it, plus (as a safety net) the whole cache once a bulk
+    /// fetch finishes.
+    fn poll_and_invalidate(&mut self) {
+        let was_fetching = self.app.bulk_fetch_progress.is_some();
+        match self.app.poll_cover_fetch_results() {
+            Ok(updated) => {
+                for id in updated {
+                    self.textures.remove(&id);
+                }
+            }
+            Err(err) => self.report(Err(err)),
+        }
+        if was_fetching && self.app.bulk_fetch_progress.is_none() {
+            self.textures.clear();
+        }
+    }
+
+    /// Opens a native file dialog on a background thread. rfd's dialogs
+    /// block until closed, and blocking egui's update loop that long makes
+    /// the window stop repainting and the compositor flag it as not
+    /// responding. The result is picked up by `poll_file_dialog`.
+    fn open_file_dialog(&mut self, purpose: FileDialogPurpose) {
+        if self.pending_file_dialog.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let dialog = purpose.dialog();
+            let path = match purpose {
+                FileDialogPurpose::ExportCsv => dialog.save_file(),
+                FileDialogPurpose::ImportCover(_) | FileDialogPurpose::ImportCsv => dialog.pick_file(),
+            };
+            let _ = tx.send(path);
+        });
+        self.pending_file_dialog = Some((purpose, rx));
+    }
+
+    /// Acts on a file dialog's result once it arrives.
+    fn poll_file_dialog(&mut self) {
+        let Some((purpose, rx)) = &self.pending_file_dialog else {
+            return;
+        };
+        let purpose = *purpose;
+        let path = match rx.try_recv() {
+            Ok(path) => path,
+            Err(mpsc::TryRecvError::Empty) => return,
+            // The dialog thread died without answering; treat as cancelled.
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        };
+        self.pending_file_dialog = None;
+        let Some(path) = path else {
+            return;
+        };
+        match purpose {
+            FileDialogPurpose::ImportCover(entry_id) => {
+                // Only apply it if the import prompt is still open for the
+                // same entry; the user may have cancelled or moved on.
+                if self.app.mode == Mode::TextInput(TextInputKind::ImportCoverArt)
+                    && self.app.selected_entry().map(|e| e.id) == Some(entry_id)
+                {
+                    self.app.input_buffer = path.display().to_string();
+                    let result = self.app.commit_import_cover();
+                    self.report(result);
+                    self.invalidate_texture(entry_id);
+                }
+            }
+            FileDialogPurpose::ImportCsv => {
+                let result = self.app.import_csv(&path).map(|_| ());
+                self.report(result);
+            }
+            // The native save dialog confirms overwriting an existing file
+            // itself, so unlike the TUI's typed path this may replace one.
+            FileDialogPurpose::ExportCsv => {
+                self.app.export_csv(&path);
+            }
+        }
+    }
+
+    /// Drops the cached texture for `entry_id`, if any, forcing the next
+    /// `cover_texture` call to reload it from disk. Used after any action
+    /// that may have changed an entry's cover art outside of a background
+    /// fetch (manual import) or removed the entry entirely (delete).
+    fn invalidate_texture(&mut self, entry_id: Uuid) {
+        self.textures.remove(&entry_id);
+    }
+
+    fn cover_texture(&mut self, ctx: &egui::Context, entry_id: Uuid) -> Option<egui::TextureHandle> {
+        if !self.textures.contains_key(&entry_id) {
+            let loaded = self.app.library.get(entry_id).and_then(|entry| {
+                let relative = entry.cover_art.as_ref()?;
+                let path = self.app.library.resolve_cover_art(relative);
+                let img = image::ImageReader::open(&path).ok()?.decode().ok()?;
+                let rgba = img.to_rgba8();
+                let (width, height) = rgba.dimensions();
+                let color_image =
+                    egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], rgba.as_raw());
+                Some(ctx.load_texture(format!("cover-{entry_id}"), color_image, egui::TextureOptions::LINEAR))
+            });
+            self.textures.insert(entry_id, loaded);
+        }
+        self.textures.get(&entry_id).cloned().flatten()
+    }
+
+    /// Mirrors `main.rs`'s per-mode Escape handling, so the key does the same
+    /// thing in both front ends. In normal mode it quits (the window is
+    /// then closed in `ui`), except when egui itself has a use for the
+    /// key: closing an open dropdown or leaving a focused text field.
+    fn handle_escape(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            return;
+        }
+        let result = match self.app.mode.clone() {
+            // As in the TUI, Esc clears an active search before it quits.
+            Mode::Normal | Mode::Searching if !self.app.search_query.is_empty() => {
+                self.app.clear_search();
+                Ok(())
+            }
+            Mode::Normal | Mode::Searching if self.egui_owned_escape => Ok(()),
+            Mode::Normal | Mode::Searching => self.app.quit(),
+            Mode::EditingNotes => self.app.commit_notes(),
+            Mode::ConfirmDelete | Mode::AwaitingRating | Mode::TextInput(_) => {
+                self.app.cancel_input();
+                Ok(())
+            }
+            Mode::SetupChooseSource => {
+                self.app.choose_setup_source(CoverSource::Manual);
+                Ok(())
+            }
+            Mode::EnterApiKey { .. } => {
+                self.app.cancel_api_key_entry();
+                Ok(())
+            }
+            Mode::CoverFetchChoice { .. } => {
+                self.app.skip_cover();
+                Ok(())
+            }
+        };
+        self.report(result);
+    }
+
+    fn draw_list(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Library");
+        ui.horizontal(|ui| {
+            ui.label("Filter:");
+            let mut changed = false;
+            egui::ComboBox::from_id_salt("filter_combo")
+                .selected_text(self.app.filter.label().to_string())
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(self.app.filter == Filter::All, "All Entries").clicked() {
+                        self.app.filter = Filter::All;
+                        changed = true;
+                    }
+                    for system in self.app.systems() {
+                        let is_selected = self.app.filter == Filter::System(system.clone());
+                        if ui.selectable_label(is_selected, &system).clicked() {
+                            self.app.filter = Filter::System(system);
+                            changed = true;
+                        }
+                    }
+                });
+            if changed {
+                self.app.clamp_selection();
+                if self.app.list_state.selected().is_none() && !self.app.visible_entries().is_empty() {
+                    self.app.list_state.select(Some(0));
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Search:");
+            let mut query = self.app.search_query.clone();
+            // Leave room for the Clear button rather than letting the field's
+            // default width push the resizable panel wider.
+            let width = (ui.available_width() - 50.0).max(60.0);
+            let response = ui.add(egui::TextEdit::singleline(&mut query).hint_text("Title").desired_width(width));
+            if response.changed() {
+                self.app.set_search_query(query);
+            }
+            // Plain text rather than a glyph: egui's default font lacks
+            // symbols like ✕ and arrows, which render as empty boxes.
+            if !self.app.search_query.is_empty() && ui.small_button("Clear").clicked() {
+                self.app.clear_search();
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Sort:");
+            let (current, reversed) = (self.app.settings.sort_key, self.app.settings.sort_reversed);
+            let mut chosen = current;
+            egui::ComboBox::from_id_salt("sort_combo")
+                .selected_text(current.label())
+                .show_ui(ui, |ui| {
+                    for key in SortKey::ALL {
+                        ui.selectable_value(&mut chosen, key, key.label());
+                    }
+                });
+            let reverse_clicked = ui
+                .selectable_label(reversed, "Reverse")
+                .on_hover_text("Reverse the sort order")
+                .clicked();
+            if chosen != current {
+                self.app.set_sort(chosen, false);
+            } else if reverse_clicked {
+                self.app.set_sort(current, !reversed);
+            }
+        });
+        ui.separator();
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            let selected_id = self.app.selected_entry().map(|e| e.id);
+            let rows: Vec<(usize, Uuid, String)> = self
+                .app
+                .visible_entries()
+                .iter()
+                .enumerate()
+                .map(|(idx, e)| {
+                    (
+                        idx,
+                        e.id,
+                        format!("{}\n{} · {} · {:.1}h", e.title, e.system, e.status.label(), e.hours),
+                    )
+                })
+                .collect();
+            if rows.is_empty() {
+                if self.app.search_query.is_empty() {
+                    ui.weak("No entries yet — click Add below.");
+                } else {
+                    ui.weak("No titles match your search.");
+                }
+            }
+            for (idx, id, label) in rows {
+                if ui.selectable_label(selected_id == Some(id), label).clicked() {
+                    self.app.list_state.select(Some(idx));
+                }
+            }
+        });
+    }
+
+    fn draw_toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Add").clicked() {
+                self.app.begin_add_entry();
+            }
+            let has_selection = self.app.selected_entry().is_some();
+            if ui.add_enabled(has_selection, egui::Button::new("Delete")).clicked() {
+                self.app.begin_delete();
+            }
+            if ui.add_enabled(has_selection, egui::Button::new("Edit Title")).clicked() {
+                self.app.begin_edit_title();
+            }
+            if ui.add_enabled(has_selection, egui::Button::new("Edit System")).clicked() {
+                self.app.begin_edit_system();
+            }
+            if ui.add_enabled(has_selection, egui::Button::new("Release Date")).clicked() {
+                self.app.begin_edit_release_date();
+            }
+            if ui.add_enabled(has_selection, egui::Button::new("Cycle Status")).clicked() {
+                let result = self.app.cycle_status();
+                self.report(result);
+            }
+            if ui.add_enabled(has_selection, egui::Button::new("Edit Hours")).clicked() {
+                self.app.begin_edit_hours();
+            }
+            if ui.add_enabled(has_selection, egui::Button::new("Rating")).clicked() {
+                self.app.begin_rating();
+            }
+            if ui.add_enabled(has_selection, egui::Button::new("Import Cover")).clicked() {
+                self.app.begin_import_cover();
+            }
+            if ui.add_enabled(has_selection, egui::Button::new("Notes")).clicked() {
+                self.app.begin_edit_notes();
+            }
+
+            let selected_id = self.app.selected_entry().map(|e| e.id);
+            let session = self.app.active_session_elapsed();
+            let session_label = match session {
+                Some((id, elapsed)) if Some(id) == selected_id => format!("Stop Session ({})", format_duration(elapsed)),
+                Some(_) => "Session Running Elsewhere".to_string(),
+                None => "Start Session".to_string(),
+            };
+            if ui.add_enabled(has_selection, egui::Button::new(session_label)).clicked() {
+                let result = self.app.toggle_session();
+                self.report(result);
+            }
+
+            if ui.button("Fetch All Covers").clicked() {
+                self.app.begin_fetch_all_covers();
+            }
+            let dialog_open = self.pending_file_dialog.is_some();
+            if ui.add_enabled(!dialog_open, egui::Button::new("Import CSV...")).clicked() {
+                self.open_file_dialog(FileDialogPurpose::ImportCsv);
+            }
+            if ui.add_enabled(!dialog_open, egui::Button::new("Export CSV...")).clicked() {
+                self.open_file_dialog(FileDialogPurpose::ExportCsv);
+            }
+        });
+
+        if let Some((done, succeeded, total)) = self.app.bulk_fetch_progress {
+            ui.label(format!("Fetching covers: {done}/{total} ({succeeded} succeeded so far)"));
+        }
+        if let Some(message) = self.app.status_message.clone() {
+            ui.colored_label(egui::Color32::from_rgb(120, 200, 255), message);
+        }
+    }
+
+    fn draw_detail(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        let Some(entry) = self.app.selected_entry().cloned() else {
+            ui.label("Select an entry from the list on the left, or click Add to create one.");
+            return;
+        };
+
+        ui.heading(&entry.title);
+        ui.horizontal(|ui| {
+            if let Some(texture) = self.cover_texture(ctx, entry.id) {
+                let max_size = egui::vec2(160.0, 220.0);
+                let size = texture.size_vec2();
+                let scale = (max_size.x / size.x).min(max_size.y / size.y).min(1.0);
+                ui.image((texture.id(), size * scale));
+            } else {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(160.0, 220.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "No cover art",
+                    egui::FontId::default(),
+                    ui.visuals().weak_text_color(),
+                );
+            }
+
+            ui.vertical(|ui| {
+                ui.label(format!("System: {}", entry.system));
+                ui.label(format!("Status: {}", entry.status.label()));
+                let session = self
+                    .app
+                    .active_session_elapsed()
+                    .filter(|(id, _)| *id == entry.id)
+                    .map(|(_, elapsed)| elapsed);
+                match session {
+                    Some(elapsed) => ui.colored_label(
+                        egui::Color32::YELLOW,
+                        format!("Hours: {:.1}  (session: {})", entry.hours, format_duration(elapsed)),
+                    ),
+                    None => ui.label(format!("Hours: {:.1}", entry.hours)),
+                };
+                let rating = entry.rating.map(|r| stars(r.stars())).unwrap_or_else(|| "Unrated".to_string());
+                ui.label(format!("Rating: {rating}"));
+                let release_date = entry
+                    .release_date
+                    .map(|d| d.format("%Y-%m-%d").to_string())
+                    .unwrap_or_else(|| "Unknown".to_string());
+                ui.label(format!("Released: {release_date}"));
+                let last_played = entry
+                    .last_played
+                    .map(|t| t.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string())
+                    .unwrap_or_else(|| "Never".to_string());
+                ui.label(format!("Last played: {last_played}"));
+            });
+        });
+
+        ui.separator();
+        ui.label("Notes:");
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.label(if entry.notes.is_empty() { "(none)" } else { entry.notes.as_str() });
+        });
+    }
+
+    fn draw_dialog(&mut self, ctx: &egui::Context) {
+        if !matches!(self.app.mode, Mode::TextInput(_)) {
+            self.last_text_input_kind = None;
+        }
+        match self.app.mode.clone() {
+            // Searching is the TUI's search prompt; the GUI's search box is
+            // always visible in the list panel instead, so there's no dialog.
+            Mode::Normal | Mode::Searching => {}
+            Mode::EditingNotes => self.draw_notes_dialog(ctx),
+            Mode::ConfirmDelete => self.draw_confirm_delete_dialog(ctx),
+            Mode::AwaitingRating => self.draw_rating_dialog(ctx),
+            Mode::TextInput(kind) => self.draw_text_input_dialog(ctx, kind),
+            Mode::SetupChooseSource => self.draw_setup_dialog(ctx),
+            Mode::EnterApiKey { source, .. } => self.draw_api_key_dialog(ctx, source),
+            Mode::CoverFetchChoice { entry_id, .. } => self.draw_cover_fetch_choice_dialog(ctx, entry_id),
+        }
+    }
+
+    fn draw_notes_dialog(&mut self, ctx: &egui::Context) {
+        egui::Modal::new(egui::Id::new("edit_notes_modal")).show(ctx, |ui| {
+            ui.heading("Edit Notes");
+            ui.add(
+                egui::TextEdit::multiline(&mut self.app.input_buffer)
+                    .desired_rows(10)
+                    .desired_width(400.0),
+            );
+            ui.horizontal(|ui| {
+                if ui.button("Save").clicked() {
+                    let result = self.app.commit_notes();
+                    self.report(result);
+                }
+                if ui.button("Cancel").clicked() {
+                    self.app.cancel_input();
+                }
+            });
+        });
+    }
+
+    fn draw_confirm_delete_dialog(&mut self, ctx: &egui::Context) {
+        let title = self.app.selected_entry().map(|e| e.title.clone()).unwrap_or_default();
+        egui::Modal::new(egui::Id::new("confirm_delete_modal")).show(ctx, |ui| {
+            ui.heading("Delete Entry");
+            ui.label(format!("Delete '{title}'? This cannot be undone."));
+            ui.horizontal(|ui| {
+                if ui.button("Delete").clicked() {
+                    let entry_id = self.app.selected_entry().map(|e| e.id);
+                    let result = self.app.confirm_delete();
+                    self.report(result);
+                    if let Some(id) = entry_id {
+                        self.invalidate_texture(id);
+                    }
+                }
+                if ui.button("Cancel").clicked() {
+                    self.app.cancel_input();
+                }
+            });
+        });
+    }
+
+    fn draw_rating_dialog(&mut self, ctx: &egui::Context) {
+        egui::Modal::new(egui::Id::new("rating_modal")).show(ctx, |ui| {
+            ui.heading("Set Rating");
+            ui.horizontal(|ui| {
+                for stars in 1..=5u8 {
+                    if ui.button(format!("{stars} \u{2605}")).clicked() {
+                        let result = self.app.set_rating(stars);
+                        self.report(result);
+                    }
+                }
+                if ui.button("Unrated").clicked() {
+                    let result = self.app.clear_rating();
+                    self.report(result);
+                }
+            });
+            if ui.button("Cancel").clicked() {
+                self.app.cancel_input();
+            }
+        });
+        for (digit, key) in [
+            (1u8, egui::Key::Num1),
+            (2, egui::Key::Num2),
+            (3, egui::Key::Num3),
+            (4, egui::Key::Num4),
+            (5, egui::Key::Num5),
+        ] {
+            if ctx.input(|i| i.key_pressed(key)) {
+                let result = self.app.set_rating(digit);
+                self.report(result);
+            }
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Num0)) {
+            let result = self.app.clear_rating();
+            self.report(result);
+        }
+    }
+
+    fn draw_text_input_dialog(&mut self, ctx: &egui::Context, kind: TextInputKind) {
+        egui::Modal::new(egui::Id::new("text_input_modal")).show(ctx, |ui| {
+            ui.heading(kind.title());
+            ui.label(kind.prompt());
+            let response = ui.text_edit_singleline(&mut self.app.input_buffer);
+            // Focus it whenever this is a new text-input dialog (fresh open,
+            // or switching straight from one kind to another, e.g. new
+            // entry's title -> system), but don't keep stealing focus back
+            // every frame after that or Tab could never reach the buttons.
+            if self.last_text_input_kind != Some(kind) {
+                response.request_focus();
+                self.last_text_input_kind = Some(kind);
+            }
+            let submitted = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+
+            ui.horizontal(|ui| {
+                let ok_clicked = ui.button("OK").clicked();
+                let dialog_open = self.pending_file_dialog.is_some();
+                if kind == TextInputKind::ImportCoverArt
+                    && ui.add_enabled(!dialog_open, egui::Button::new("Browse...")).clicked()
+                    && let Some(id) = self.app.selected_entry().map(|e| e.id)
+                {
+                    self.open_file_dialog(FileDialogPurpose::ImportCover(id));
+                }
+                if ui.button("Cancel").clicked() {
+                    self.app.cancel_input();
+                }
+
+                if submitted || ok_clicked {
+                    let entry_id = self.app.selected_entry().map(|e| e.id);
+                    let result = match kind {
+                        TextInputKind::NewTitle => {
+                            self.app.submit_new_title();
+                            Ok(())
+                        }
+                        TextInputKind::NewSystem => self.app.submit_new_system(),
+                        TextInputKind::EditTitle => self.app.commit_title(),
+                        TextInputKind::EditSystem => self.app.commit_system(),
+                        TextInputKind::EditHours => self.app.commit_hours(),
+                        TextInputKind::EditReleaseDate => self.app.commit_release_date(),
+                        TextInputKind::ImportCoverArt => self.app.commit_import_cover(),
+                        TextInputKind::ExportCsv => {
+                            self.app.commit_export_csv();
+                            Ok(())
+                        }
+                        TextInputKind::ImportCsv => self.app.commit_import_csv(),
+                    };
+                    self.report(result);
+                    if kind == TextInputKind::ImportCoverArt
+                        && let Some(id) = entry_id
+                    {
+                        self.invalidate_texture(id);
+                    }
+                }
+            });
+        });
+    }
+
+    fn draw_setup_dialog(&mut self, ctx: &egui::Context) {
+        egui::Modal::new(egui::Id::new("setup_modal")).show(ctx, |ui| {
+            ui.heading("Welcome to gamelog!");
+            ui.label("Choose a default source for cover art:");
+            if ui.button("SteamGridDB (best cover/box art quality)").clicked() {
+                self.app.choose_setup_source(CoverSource::SteamGridDb);
+            }
+            if ui.button("RAWG.io (broader metadata, banner-style art)").clicked() {
+                self.app.choose_setup_source(CoverSource::Rawg);
+            }
+            if ui.button("Manual (you supply your own image files)").clicked() {
+                self.app.choose_setup_source(CoverSource::Manual);
+            }
+        });
+    }
+
+    fn draw_api_key_dialog(&mut self, ctx: &egui::Context, source: CoverSource) {
+        egui::Modal::new(egui::Id::new("api_key_modal")).show(ctx, |ui| {
+            ui.heading(format!("Enter {} API Key", source.label()));
+            let response = ui.add(egui::TextEdit::singleline(&mut self.app.input_buffer).password(true));
+            if ui.memory(|mem| mem.focused().is_none()) {
+                response.request_focus();
+            }
+            let submitted = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            ui.horizontal(|ui| {
+                let ok_clicked = ui.button("OK").clicked();
+                if ui.button("Cancel").clicked() {
+                    self.app.cancel_api_key_entry();
+                }
+                if ok_clicked || submitted {
+                    let result = self.app.submit_api_key();
+                    self.report(result);
+                }
+            });
+        });
+    }
+
+    fn draw_cover_fetch_choice_dialog(&mut self, ctx: &egui::Context, entry_id: Uuid) {
+        let title = self.app.library.get(entry_id).map(|e| e.title.clone()).unwrap_or_default();
+        let tried = match &self.app.mode {
+            Mode::CoverFetchChoice { tried, .. } => tried.clone(),
+            _ => Vec::new(),
+        };
+        egui::Modal::new(egui::Id::new("cover_fetch_choice_modal")).show(ctx, |ui| {
+            ui.heading("Cover Art Not Found");
+            ui.label(format!("No cover art found for '{title}'. What would you like to do?"));
+            ui.horizontal(|ui| {
+                if ui.button("Try SteamGridDB").clicked() {
+                    self.app.choose_fallback_source(entry_id, tried.clone(), CoverSource::SteamGridDb);
+                }
+                if ui.button("Try RAWG.io").clicked() {
+                    self.app.choose_fallback_source(entry_id, tried.clone(), CoverSource::Rawg);
+                }
+                if ui.button("Import Manually").clicked() {
+                    self.app.choose_manual_cover(entry_id);
+                }
+                if ui.button("Skip").clicked() {
+                    self.app.skip_cover();
+                }
+            });
+        });
+    }
+}
+
+impl eframe::App for GamelogApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.poll_and_invalidate();
+        self.poll_file_dialog();
+
+        let ctx = ui.ctx().clone();
+        if ctx.input(|i| i.viewport().close_requested()) {
+            let result = self.app.quit();
+            if result.is_err() {
+                // Finalizing the play session failed to save; keep the
+                // window open so the error is visible and nothing is lost.
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            }
+            self.report(result);
+        }
+        self.handle_escape(&ctx);
+        // `App::quit` only sets a flag (the TUI's event loop checks it), so
+        // the GUI has to act on it by closing the window itself.
+        if self.app.should_quit {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
+        egui::Panel::left("entry_list")
+            .resizable(true)
+            .default_size(280.0)
+            .show(ui, |ui| self.draw_list(ui));
+
+        egui::Panel::bottom("toolbar").resizable(false).show(ui, |ui| self.draw_toolbar(ui));
+
+        egui::CentralPanel::default().show(ui, |ui| self.draw_detail(&ctx, ui));
+
+        self.draw_dialog(&ctx);
+
+        self.egui_owned_escape = egui::Popup::is_any_open(&ctx) || ctx.text_edit_focused();
+
+        // Keep the session timer and any in-flight fetch progress live even
+        // with no user input, mirroring the TUI's fixed-interval redraw loop.
+        ctx.request_repaint_after(Duration::from_millis(200));
+    }
+}

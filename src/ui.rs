@@ -197,12 +197,12 @@ fn draw_info(frame: &mut Frame, entry: &Entry, session_elapsed: Option<Duration>
 }
 
 /// Formats a duration as `HH:MM:SS` for the live session timer.
-fn format_duration(d: Duration) -> String {
+pub(crate) fn format_duration(d: Duration) -> String {
     let secs = d.as_secs();
     format!("{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
 }
 
-fn stars(count: u8) -> String {
+pub(crate) fn stars(count: u8) -> String {
     let filled = "★".repeat(count as usize);
     let empty = "☆".repeat((5u8.saturating_sub(count)) as usize);
     format!("{filled}{empty}")
@@ -278,6 +278,8 @@ fn footer_hints(mode: &Mode, kb: &Keybindings) -> Vec<(String, &'static str)> {
                 format!("{}/{}", key_label(kb.sort_next), key_label(kb.sort_reverse)),
                 "Sort/Reverse",
             ),
+            (key_label(kb.import_csv), "Import CSV"),
+            (key_label(kb.export_csv), "Export CSV"),
             (key_label(kb.quit), "Quit"),
         ],
         Mode::Searching => vec![
@@ -302,7 +304,8 @@ fn footer_hints(mode: &Mode, kb: &Keybindings) -> Vec<(String, &'static str)> {
             let enter_label = match kind {
                 TextInputKind::NewTitle => "Next: System",
                 TextInputKind::NewSystem => "Create Entry",
-                TextInputKind::ImportCoverArt => "Import",
+                TextInputKind::ImportCoverArt | TextInputKind::ImportCsv => "Import",
+                TextInputKind::ExportCsv => "Export",
                 _ => "Save",
             };
             vec![
