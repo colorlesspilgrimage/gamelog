@@ -72,6 +72,8 @@ fn run(mut terminal: ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                     let kb = app.keybindings.clone();
                     match key.code {
                         // Fixed fallbacks: always available regardless of config.
+                        // Esc clears an active search before it quits.
+                        KeyCode::Esc if !app.search_query.is_empty() => app.clear_search(),
                         KeyCode::Esc => app.quit()?,
                         KeyCode::Up => app.select_previous(),
                         KeyCode::Down => app.select_next(),
@@ -92,6 +94,9 @@ fn run(mut terminal: ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                         code if code == kb.edit_system => app.begin_edit_system(),
                         code if code == kb.edit_release_date => app.begin_edit_release_date(),
                         code if code == kb.fetch_all_covers => app.begin_fetch_all_covers(),
+                        code if code == kb.search => app.begin_search(),
+                        code if code == kb.sort_next => app.cycle_sort_key(),
+                        code if code == kb.sort_reverse => app.toggle_sort_reversed(),
                         _ => {}
                     }
                 }
@@ -102,6 +107,15 @@ fn run(mut terminal: ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                         app.input_buffer.pop();
                     }
                     KeyCode::Char(c) => app.input_buffer.push(c),
+                    _ => {}
+                },
+                Mode::Searching => match key.code {
+                    KeyCode::Esc => app.clear_search(),
+                    KeyCode::Enter => app.commit_search(),
+                    KeyCode::Up => app.select_previous(),
+                    KeyCode::Down => app.select_next(),
+                    KeyCode::Backspace => app.pop_search_char(),
+                    KeyCode::Char(c) => app.push_search_char(c),
                     _ => {}
                 },
                 Mode::ConfirmDelete => match key.code {
