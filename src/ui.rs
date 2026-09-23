@@ -278,6 +278,8 @@ fn footer_hints(mode: &Mode, kb: &Keybindings) -> Vec<(String, &'static str)> {
                 format!("{}/{}", key_label(kb.sort_next), key_label(kb.sort_reverse)),
                 "Sort/Reverse",
             ),
+            (key_label(kb.import_csv), "Import CSV"),
+            (key_label(kb.export_csv), "Export CSV"),
             (key_label(kb.quit), "Quit"),
         ],
         Mode::Searching => vec![
@@ -302,7 +304,8 @@ fn footer_hints(mode: &Mode, kb: &Keybindings) -> Vec<(String, &'static str)> {
             let enter_label = match kind {
                 TextInputKind::NewTitle => "Next: System",
                 TextInputKind::NewSystem => "Create Entry",
-                TextInputKind::ImportCoverArt => "Import",
+                TextInputKind::ImportCoverArt | TextInputKind::ImportCsv => "Import",
+                TextInputKind::ExportCsv => "Export",
                 _ => "Save",
             };
             vec![

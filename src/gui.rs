@@ -278,6 +278,22 @@ impl GamelogApp {
             if ui.button("Fetch All Covers").clicked() {
                 self.app.begin_fetch_all_covers();
             }
+            if ui.button("Import CSV...").clicked()
+                && let Some(path) = rfd::FileDialog::new().add_filter("CSV", &["csv"]).pick_file()
+            {
+                let result = self.app.import_csv(&path).map(|_| ());
+                self.report(result);
+            }
+            // The native save dialog confirms overwriting an existing file
+            // itself, so unlike the TUI's typed path this may replace one.
+            if ui.button("Export CSV...").clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .add_filter("CSV", &["csv"])
+                    .set_file_name("gamelog-export.csv")
+                    .save_file()
+            {
+                self.app.export_csv(&path);
+            }
         });
 
         if let Some((done, succeeded, total)) = self.app.bulk_fetch_progress {
@@ -492,6 +508,11 @@ impl GamelogApp {
                         TextInputKind::EditHours => self.app.commit_hours(),
                         TextInputKind::EditReleaseDate => self.app.commit_release_date(),
                         TextInputKind::ImportCoverArt => self.app.commit_import_cover(),
+                        TextInputKind::ExportCsv => {
+                            self.app.commit_export_csv();
+                            Ok(())
+                        }
+                        TextInputKind::ImportCsv => self.app.commit_import_csv(),
                     };
                     self.report(result);
                     if kind == TextInputKind::ImportCoverArt
