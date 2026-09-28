@@ -65,9 +65,11 @@ A running record of what's done and what's left. gamelog is a terminal UI
   with comments on first run; a live help bar reflects whatever's bound.
 - Session timer shown prominently in the footer while running.
 
-## Remaining
+### Distribution
 
-### Possible future milestones (not yet started, not committed to)
-
-- Packaging/distribution (e.g. prebuilt binaries or a Homebrew/AUR
-  package) beyond `cargo install`.
+- Tagged releases (`v*`) build prebuilt binaries for x86_64 Linux and
+  Apple Silicon/Intel macOS via GitHub Actions and attach them, with
+  SHA-256 checksums, to a GitHub Release (`.github/workflows/release.yml`).
+- CI builds and tests every push and pull request to `master`.
+- An AUR `PKGBUILD` in `packaging/aur/` (not yet published to the AUR);
+  release steps are in `packaging/RELEASING.md`.

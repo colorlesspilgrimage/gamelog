@@ -39,12 +39,35 @@ Track title, system, status, hours played, a 5-star rating, cover art, and freef
 
 ## Installing
 
-### Prerequisites
+### Prebuilt binaries
 
-- A Rust toolchain (install via [rustup](https://rustup.rs/) if you don't have one).
-- A terminal emulator. Any ANSI terminal works; for inline cover art images, use one that supports the Kitty, iTerm2, or Sixel graphics protocol (e.g. [kitty](https://sw.kovidgoyal.net/kitty/), [foot](https://codeberg.org/dnkl/foot), [WezTerm](https://wezfurlong.org/wezterm/)) — other terminals still work, falling back to a Unicode block-art rendering of the cover.
+Each tagged release on the [GitHub Releases](https://github.com/colorlesspilgrimage/gamelog/releases) page includes prebuilt binaries for Linux (`x86_64-unknown-linux-gnu`) and macOS (`aarch64-apple-darwin` for Apple Silicon, `x86_64-apple-darwin` for Intel). Download the `gamelog-<version>-<target>.tar.gz` archive for your platform, optionally check it against its `.sha256` file, then extract it and put the binary on your `PATH`:
+
+```sh
+sha256sum -c gamelog-v0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256   # macOS: shasum -a 256 -c …
+tar -xzf gamelog-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+cp gamelog-v0.1.0-x86_64-unknown-linux-gnu/gamelog ~/.local/bin/
+```
+
+The macOS binaries aren't signed or notarized, so Gatekeeper may block the first launch; clear the quarantine flag with `xattr -d com.apple.quarantine gamelog` if it does.
+
+### Arch Linux (AUR)
+
+A `PKGBUILD` lives in [`packaging/aur/`](packaging/aur/). It isn't published to the AUR yet, so build and install it locally with `makepkg` (this builds the tagged release from source, runs the tests, and installs `/usr/bin/gamelog`):
+
+```sh
+git clone https://github.com/colorlesspilgrimage/gamelog.git
+cd gamelog/packaging/aur
+makepkg -si
+```
 
 ### Build from source
+
+#### Prerequisites
+
+- A Rust toolchain, 1.85 or newer (install via [rustup](https://rustup.rs/) if you don't have one).
+
+#### Building
 
 ```sh
 git clone https://github.com/colorlesspilgrimage/gamelog.git
@@ -54,7 +77,7 @@ cargo build --release
 
 The compiled binary will be at `target/release/gamelog`.
 
-### Install it somewhere on your `PATH`
+#### Install it somewhere on your `PATH`
 
 Either let Cargo install it for you:
 
@@ -73,6 +96,10 @@ Then just run:
 ```sh
 gamelog
 ```
+
+### Terminal requirements
+
+Any ANSI terminal works. For inline cover art images, use one that supports the Kitty, iTerm2, or Sixel graphics protocol (e.g. [kitty](https://sw.kovidgoyal.net/kitty/), [foot](https://codeberg.org/dnkl/foot), [WezTerm](https://wezfurlong.org/wezterm/)) — other terminals still work, falling back to a Unicode block-art rendering of the cover.
 
 ## Configuration
 
