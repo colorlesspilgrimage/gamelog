@@ -13,9 +13,9 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Local, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 
-use crate::entry::{Entry, Rating, Status};
+use crate::entry::{Entry, Rating, Status, local_midnight};
 
 const HEADERS: [&str; 8] = [
     "title",
@@ -194,8 +194,8 @@ fn parse_last_played(raw: &str) -> Result<Option<DateTime<Utc>>, String> {
     }
     NaiveDate::parse_from_str(raw, "%Y-%m-%d")
         .ok()
-        .and_then(|d| d.and_hms_opt(0, 0, 0)?.and_local_timezone(Local).earliest())
-        .map(|t| Some(t.with_timezone(&Utc)))
+        .and_then(local_midnight)
+        .map(Some)
         .ok_or_else(|| {
             format!("invalid last played \"{raw}\" (expected YYYY-MM-DD or an RFC 3339 timestamp)")
         })
@@ -204,6 +204,7 @@ fn parse_last_played(raw: &str) -> Result<Option<DateTime<Utc>>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Local;
 
     fn parse(csv: &str) -> ParsedCsv {
         read_entries(csv.as_bytes()).unwrap()

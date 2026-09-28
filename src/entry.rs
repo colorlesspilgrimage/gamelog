@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::path::PathBuf;
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -61,8 +61,8 @@ pub struct Entry {
     /// Freeform, persistent notes about this entry.
     #[serde(default)]
     pub notes: String,
-    /// When a play session for this entry last ended. `None` for entries
-    /// never timed with a session (including all pre-existing entries).
+    /// When this entry was last played: set when a play session ends, typed
+    /// in by hand, or imported from CSV. `None` for entries never played.
     #[serde(default)]
     pub last_played: Option<DateTime<Utc>>,
 }
@@ -90,6 +90,31 @@ impl Entry {
     pub fn matches_query(&self, query: &str) -> bool {
         let query = query.trim();
         query.is_empty() || self.title.to_lowercase().contains(&query.to_lowercase())
+    }
+}
+
+/// The *last played* timestamp for a calendar date: local midnight, so it
+/// displays as that same date.
+pub fn local_midnight(date: NaiveDate) -> Option<DateTime<Utc>> {
+    date.and_hms_opt(0, 0, 0)?
+        .and_local_timezone(Local)
+        .earliest()
+        .map(|t| t.with_timezone(&Utc))
+}
+
+impl Entry {
+    /// The local calendar date this entry was last played, if ever.
+    pub fn last_played_date(&self) -> Option<NaiveDate> {
+        self.last_played.map(|t| t.with_timezone(&Local).date_naive())
+    }
+
+    /// Sets *last played* to a calendar date (or clears it). Re-entering the
+    /// date it already shows keeps the original timestamp rather than
+    /// resetting it to midnight.
+    pub fn set_last_played_date(&mut self, date: Option<NaiveDate>) {
+        if date != self.last_played_date() {
+            self.last_played = date.and_then(local_midnight);
+        }
     }
 }
 
@@ -305,6 +330,25 @@ mod tests {
             "release_date":null,"system":"PC","status":"Played","hours":1.0,
             "rating":null,"cover_art":null,"notes":""}"#;
         let e: Entry = serde_json::from_str(json).unwrap();
+        assert_eq!(e.last_played, None);
+    }
+
+    #[test]
+    fn setting_last_played_date_keeps_time_only_when_date_is_unchanged() {
+        let mut e = entry("Hades");
+        let original = local_midnight(NaiveDate::from_ymd_opt(2025, 6, 1).unwrap())
+            .map(|t| t + chrono::Duration::hours(15));
+        e.last_played = original;
+
+        e.set_last_played_date(NaiveDate::from_ymd_opt(2025, 6, 1));
+        assert_eq!(e.last_played, original);
+
+        let new_date = NaiveDate::from_ymd_opt(2025, 7, 4);
+        e.set_last_played_date(new_date);
+        assert_eq!(e.last_played_date(), new_date);
+        assert_eq!(e.last_played, new_date.and_then(local_midnight));
+
+        e.set_last_played_date(None);
         assert_eq!(e.last_played, None);
     }
 }

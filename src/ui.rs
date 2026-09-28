@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-use chrono::Local;
-
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -157,8 +155,8 @@ fn draw_info(frame: &mut Frame, entry: &Entry, session_elapsed: Option<Duration>
         .unwrap_or_else(|| "Unrated".to_string());
 
     let last_played = entry
-        .last_played
-        .map(|t| t.with_timezone(&Local).format("%Y-%m-%d").to_string())
+        .last_played_date()
+        .map(|d| d.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| "Never".to_string());
 
     let status_style = match entry.status {
@@ -267,6 +265,7 @@ fn footer_hints(mode: &Mode, kb: &Keybindings) -> Vec<(String, &'static str)> {
             (key_label(kb.edit_title), "Title"),
             (key_label(kb.edit_system), "Platform"),
             (key_label(kb.edit_release_date), "Release Date"),
+            (key_label(kb.edit_last_played), "Last Played"),
             (key_label(kb.cycle_status), "Status"),
             (key_label(kb.edit_hours), "Hours"),
             (key_label(kb.toggle_session), "Start/Stop Session"),

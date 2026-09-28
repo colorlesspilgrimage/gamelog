@@ -25,6 +25,7 @@ pub struct Keybindings {
     pub edit_title: KeyCode,
     pub edit_system: KeyCode,
     pub edit_release_date: KeyCode,
+    pub edit_last_played: KeyCode,
     pub fetch_all_covers: KeyCode,
     pub search: KeyCode,
     pub sort_next: KeyCode,
@@ -52,6 +53,7 @@ impl Default for Keybindings {
             edit_title: KeyCode::Char('T'),
             edit_system: KeyCode::Char('p'),
             edit_release_date: KeyCode::Char('R'),
+            edit_last_played: KeyCode::Char('L'),
             fetch_all_covers: KeyCode::Char('F'),
             search: KeyCode::Char('/'),
             sort_next: KeyCode::Char('o'),
@@ -90,6 +92,7 @@ import_cover = { Char = "c" }
 edit_title = { Char = "T" }
 edit_system = { Char = "p" }
 edit_release_date = { Char = "R" }
+edit_last_played = { Char = "L" }
 fetch_all_covers = { Char = "F" }
 search = { Char = "/" }
 sort_next = { Char = "o" }
@@ -128,7 +131,7 @@ impl Keybindings {
         Ok((keybindings, warning))
     }
 
-    fn bindings(&self) -> [(&'static str, KeyCode); 22] {
+    fn bindings(&self) -> [(&'static str, KeyCode); 23] {
         [
             ("move_up", self.move_up),
             ("move_down", self.move_down),
@@ -145,6 +148,7 @@ impl Keybindings {
             ("edit_title", self.edit_title),
             ("edit_system", self.edit_system),
             ("edit_release_date", self.edit_release_date),
+            ("edit_last_played", self.edit_last_played),
             ("fetch_all_covers", self.fetch_all_covers),
             ("search", self.search),
             ("sort_next", self.sort_next),

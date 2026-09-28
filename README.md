@@ -22,9 +22,9 @@ Track title, system, status, hours played, a 5-star rating, cover art, and freef
 
 - **Split-pane browsing** — a scrollable list on the left (toggle between all entries and a single system with `Tab`/`Shift+Tab`), and a detail pane on the right showing cover art, info, and notes for the selected entry.
 - **Search and sort** — press `/` to filter the list by title as you type (case-insensitive), and `o` to sort by title, hours played, rating, release date, last played, or status (`O` reverses the order). Your chosen sort is remembered between runs; entries without a rating, release date, or play session always sink to the bottom.
-- **CSV import/export** — `E` saves your whole library as a CSV file (title, system, status, hours, rating, release date, last played, notes), and `I` adds entries from one. Import is forgiving so spreadsheets and other trackers' exports work: only `title` and `system` columns are required (`name`/`platform` also work), column order and header case don't matter, extra columns are ignored, and statuses like "Completed" or "In Progress" are understood. Rows already in your library (same title and system, ignoring case) are skipped, so re-importing a file never creates duplicates, and any bad rows are reported by line number without stopping the rest. Cover art isn't included.
+- **CSV import/export** — `E` saves your whole library as a CSV file (title, system, status, hours, rating, release date, last played, notes), and `I` adds entries from one. Import is forgiving so spreadsheets and other trackers' exports work: only `title` and `system` columns are required (`name`/`platform` also work), column order and header case don't matter, extra columns are ignored, and statuses like "Completed" or "In Progress" are understood. Rows already in your library (same title and system, ignoring case) are skipped, so re-importing a file never creates duplicates, and bad rows are skipped without stopping the rest; the status bar reports how many there were and the line number of the first. Cover art isn't included.
 - **Full entry model** — title, system/platform, release date, status (*Want to Play* / *Playing* / *Played*), hours played, last played date, a 0–5 star rating, cover art, and freeform persistent notes.
-- **Play sessions** — press `t` to start a live timer when you sit down to play, and press it again when you stop; the elapsed time is added to that entry's hours automatically, and its *last played* date is updated. A running session is always visible in the footer, even while you browse other entries, and is safely finalized if you quit mid-session.
+- **Play sessions** — press `t` to start a live timer when you sit down to play, and press it again when you stop; the elapsed time is added to that entry's hours automatically, and its *last played* date is updated. A running session is always visible in the footer, even while you browse other entries, and is safely finalized if you quit mid-session. Played without the timer? Set the *last played* date directly with `L`.
 - **Automatic cover art**, from either of two free APIs, or your own image files:
   - [SteamGridDB](https://www.steamgriddb.com/) — purpose-built box/grid art, best visual quality.
   - [RAWG.io](https://rawg.io/apidocs) — broader metadata coverage, banner-style images.
@@ -101,6 +101,7 @@ Shown contextually along the bottom of the screen at all times; the primary brow
 | `T` | Edit title |
 | `p` | Edit system/platform |
 | `R` | Edit release date |
+| `L` | Edit last played date |
 | `s` | Cycle status |
 | `h` | Edit hours played |
 | `t` | Start/stop a play session (adds elapsed time to hours played) |

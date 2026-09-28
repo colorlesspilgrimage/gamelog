@@ -45,6 +45,7 @@ pub enum TextInputKind {
     EditSystem,
     EditHours,
     EditReleaseDate,
+    EditLastPlayed,
     ImportCoverArt,
     ExportCsv,
     ImportCsv,
@@ -59,6 +60,7 @@ impl TextInputKind {
             TextInputKind::EditSystem => " Edit System ",
             TextInputKind::EditHours => " Edit Hours ",
             TextInputKind::EditReleaseDate => " Edit Release Date ",
+            TextInputKind::EditLastPlayed => " Edit Last Played ",
             TextInputKind::ImportCoverArt => " Import Cover Art ",
             TextInputKind::ExportCsv => " Export Library to CSV ",
             TextInputKind::ImportCsv => " Import Entries from CSV ",
@@ -73,6 +75,7 @@ impl TextInputKind {
             TextInputKind::EditSystem => "Enter the system/platform:",
             TextInputKind::EditHours => "Enter hours played:",
             TextInputKind::EditReleaseDate => "Enter date as YYYY-MM-DD (blank to clear):",
+            TextInputKind::EditLastPlayed => "Enter date as YYYY-MM-DD (blank to clear):",
             TextInputKind::ImportCoverArt => "Enter path to an image file:",
             TextInputKind::ExportCsv => "Save the whole library as (a new file):",
             TextInputKind::ImportCsv => "Enter path to a CSV file:",
@@ -583,6 +586,43 @@ impl App {
         if let Some(id) = self.selected_entry().map(|e| e.id) {
             if let Some(entry) = self.library.get_mut(id) {
                 entry.release_date = parsed;
+            }
+            self.library.save()?;
+            self.reselect(Some(id));
+        }
+        self.input_buffer.clear();
+        self.mode = Mode::Normal;
+        Ok(())
+    }
+
+    // --- Last played ---
+
+    pub fn begin_edit_last_played(&mut self) {
+        if let Some(entry) = self.selected_entry() {
+            self.input_buffer = entry
+                .last_played_date()
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_default();
+            self.mode = Mode::TextInput(TextInputKind::EditLastPlayed);
+        }
+    }
+
+    pub fn commit_last_played(&mut self) -> Result<()> {
+        let trimmed = self.input_buffer.trim();
+        let parsed = if trimmed.is_empty() {
+            None
+        } else {
+            match chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
+                Ok(date) => Some(date),
+                Err(_) => {
+                    self.status_message = Some("Use YYYY-MM-DD format.".to_string());
+                    return Ok(());
+                }
+            }
+        };
+        if let Some(id) = self.selected_entry().map(|e| e.id) {
+            if let Some(entry) = self.library.get_mut(id) {
+                entry.set_last_played_date(parsed);
             }
             self.library.save()?;
             self.reselect(Some(id));
