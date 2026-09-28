@@ -10,8 +10,9 @@ A running record of what's done and what's left. gamelog is a terminal UI
 
 - Entry model: title, system/platform, release date, status (*Want to
   Play* / *Playing* / *Played*), hours played, 0–5 star rating, cover art
-  path, freeform notes, and a *last played* timestamp (set whenever a play
-  session stops; older libraries load with it unset).
+  path, freeform notes, and a *last played* date (set when a play session
+  stops, edited directly, or imported from CSV; older libraries load with
+  it unset).
 - Library storage as plain JSON in `~/.gamelog/entries.json`, with atomic
   (write-temp-then-rename) saves.
 - Filtering by system, and an "All Entries" view.
@@ -41,8 +42,10 @@ A running record of what's done and what's left. gamelog is a terminal UI
   release date, last played, notes; not cover art) and a forgiving CSV
   import: only `title`/`system` required, any column order or header case,
   common status spellings accepted, rows matching an existing title +
-  system skipped as duplicates, and bad rows reported by line without
-  aborting the import. Typed paths expand a leading `~`.
+  system skipped as duplicates, and bad rows skipped without aborting the
+  import (the status bar reports the count and the first bad row's line
+  number). Typed CSV paths expand a leading `~`; cover art import paths
+  don't.
 
 ### Terminal UI (ratatui)
 
@@ -52,7 +55,8 @@ A running record of what's done and what's left. gamelog is a terminal UI
   it; `Esc` in normal mode clears an active search before quitting).
   `o` cycles the sort key and `O` reverses it; the current sort is shown
   along the bottom of the list.
-- Last played date shown in the Info pane.
+- Last played date shown in the Info pane; `L` edits it directly (blank
+  clears it; re-entering the shown date keeps the original timestamp).
 - `I` / `E` prompt for a CSV path to import from / export to. A typed
   export path never overwrites an existing file.
 - Cover art rendered inline (Kitty/iTerm2/Sixel graphics protocol, or a
@@ -62,12 +66,6 @@ A running record of what's done and what's left. gamelog is a terminal UI
 - Session timer shown prominently in the footer while running.
 
 ## Remaining
-
-### Core
-
-- **Design choice to revisit**: *last played* is only set by stopping a play
-  session; editing hours by hand doesn't touch it, and there's no way to
-  set it directly.
 
 ### Possible future milestones (not yet started, not committed to)
 
