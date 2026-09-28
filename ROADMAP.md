@@ -98,13 +98,6 @@ itself rather than either rendering layer.
   session; editing hours by hand doesn't touch it, and there's no way to
   set it directly.
 
-### Terminal UI
-
-- **Investigate**: the first keypress after launch is dropped when running
-  under tmux (seen on builds before and after search/sort, so not a
-  regression). Likely leftover input from the terminal graphics-protocol
-  query at startup; not yet checked in a plain terminal.
-
 ### GUI
 
 - **Minor**: `draw_api_key_dialog`'s focus handling uses a simpler "focus if
