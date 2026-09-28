@@ -47,6 +47,6 @@ jobs:
       - name: Install and run the .rpm (Fedora)
         run: |
           docker run --rm -v "$PWD:/src:ro" -w /src fedora:latest bash -c '
-            dnf install -y /src/dist/*.rpm util-linux &&
+            dnf install -y /src/dist/*.rpm /usr/bin/script &&
             rpm -qil gamelog &&
             packaging/smoke-test-installed.sh'
