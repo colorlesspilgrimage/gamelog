@@ -5,7 +5,16 @@ tag matching `v*` is pushed. It builds `--release --locked` binaries for
 `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, and `x86_64-apple-darwin`,
 packages each as `gamelog-<tag>-<target>.tar.gz` (binary, `README.md`,
 `LICENSE`) with a matching `.sha256` file, and attaches them to a new GitHub
-Release for the tag.
+Release for the tag. The Linux job also builds `gamelog_<version>-1_amd64.deb`
+and `gamelog-<version>-1.x86_64.rpm` (each with a `.sha256`) via
+`packaging/build-linux-packages.sh`, using the `[package.metadata.deb]` and
+`[package.metadata.generate-rpm]` sections of `Cargo.toml`. The package
+version comes from `Cargo.toml`, not the tag.
+
+CI (`.github/workflows/ci.yml`) builds the same `.deb` and `.rpm` on every push
+and pull request, installs them on Ubuntu 22.04 and Fedora, and runs
+`packaging/smoke-test-installed.sh` against each, so packaging problems show up
+before a tag is pushed.
 
 ## Steps
 
@@ -21,8 +30,8 @@ Release for the tag.
    The tag must be `v` followed by the exact `Cargo.toml` version — the AUR
    package derives its source URL from it.
 3. **Check the release**: wait for the *Release* workflow to finish and
-   confirm the GitHub Release lists three `.tar.gz` archives and three
-   `.sha256` files.
+   confirm the GitHub Release lists three `.tar.gz` archives, one `.deb`, one
+   `.rpm`, and a `.sha256` file for each of those five.
 4. **Update the AUR package** in `packaging/aur/`:
 
    ```sh
