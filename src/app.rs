@@ -385,14 +385,6 @@ impl App {
         self.mode = Mode::Searching;
     }
 
-    /// Replaces the whole search query at once (the GUI's search box edits
-    /// it as a string rather than a keystroke at a time).
-    pub fn set_search_query(&mut self, query: String) {
-        let selected = self.selected_entry().map(|e| e.id);
-        self.search_query = query;
-        self.reselect(selected);
-    }
-
     pub fn push_search_char(&mut self, c: char) {
         let selected = self.selected_entry().map(|e| e.id);
         self.search_query.push(c);
@@ -999,20 +991,12 @@ impl App {
     }
 
     /// Drains any completed background fetches without blocking. Called
-    /// once per event loop tick. Returns the ids of entries that received
-    /// new cover art, so a caller with its own image cache (the GUI) knows
-    /// which entries to invalidate.
-    pub fn poll_cover_fetch_results(&mut self) -> Result<Vec<Uuid>> {
-        let mut updated = Vec::new();
+    /// once per event loop tick.
+    pub fn poll_cover_fetch_results(&mut self) -> Result<()> {
         while let Ok(result) = self.cover_fetch_rx.try_recv() {
-            let entry_id = result.entry_id;
-            let got_cover = matches!(result.outcome, Ok(Some(_)));
             self.handle_cover_fetch_result(result)?;
-            if got_cover {
-                updated.push(entry_id);
-            }
         }
-        Ok(updated)
+        Ok(())
     }
 
     fn handle_cover_fetch_result(&mut self, result: CoverFetchResult) -> Result<()> {
