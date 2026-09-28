@@ -23,3 +23,30 @@ jobs:
           rustup default stable
       - run: cargo build --locked
       - run: cargo test --locked
+
+  packages:
+    # Builds the .deb and .rpm the same way the release does, installs each on
+    # its own distro, and checks the installed binary starts.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --target x86_64-unknown-linux-gnu
+          rustup default stable
+      - run: cargo build --release --locked --target x86_64-unknown-linux-gnu
+      - name: Build .deb and .rpm
+        run: |
+          cargo install --locked cargo-deb@3.8.0 cargo-generate-rpm@0.21.0
+          packaging/build-linux-packages.sh x86_64-unknown-linux-gnu dist
+      - name: Install and run the .deb (Ubuntu 22.04)
+        run: |
+          sudo apt-get install -y ./dist/*.deb
+          dpkg -L gamelog
+          packaging/smoke-test-installed.sh
+      - name: Install and run the .rpm (Fedora)
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src fedora:latest bash -c '
+            dnf install -y /src/dist/*.rpm util-linux &&
+            rpm -qil gamelog &&
+            packaging/smoke-test-installed.sh'

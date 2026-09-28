@@ -70,6 +70,10 @@ A running record of what's done and what's left. gamelog is a terminal UI
 - Tagged releases (`v*`) build prebuilt binaries for x86_64 Linux and
   Apple Silicon/Intel macOS via GitHub Actions and attach them, with
   SHA-256 checksums, to a GitHub Release (`.github/workflows/release.yml`).
-- CI builds and tests every push and pull request to `master`.
+- x86_64 `.deb` and `.rpm` packages built by the same release workflow
+  (metadata in `Cargo.toml`, built by `packaging/build-linux-packages.sh`).
+- CI builds and tests every push and pull request to `master`, and builds
+  the `.deb`/`.rpm`, installs them on Ubuntu 22.04 and Fedora, and checks the
+  installed binary starts.
 - An AUR `PKGBUILD` in `packaging/aur/` (not yet published to the AUR);
   release steps are in `packaging/RELEASING.md`.

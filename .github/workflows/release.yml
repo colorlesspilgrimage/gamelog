@@ -48,12 +48,20 @@ jobs:
           tar -czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
 
+      - name: Build .deb and .rpm
+        if: runner.os == 'Linux'
+        run: |
+          cargo install --locked cargo-deb@3.8.0 cargo-generate-rpm@0.21.0
+          packaging/build-linux-packages.sh ${{ matrix.target }} .
+
       - uses: actions/upload-artifact@v7
         with:
           name: gamelog-${{ matrix.target }}
           path: |
             gamelog-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
             gamelog-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+            *.deb*
+            *.rpm*
           if-no-files-found: error
 
   release:

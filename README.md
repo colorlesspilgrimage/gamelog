@@ -51,6 +51,17 @@ cp gamelog-v0.1.0-x86_64-unknown-linux-gnu/gamelog ~/.local/bin/
 
 The macOS binaries aren't signed or notarized, so Gatekeeper may block the first launch; clear the quarantine flag with `xattr -d com.apple.quarantine gamelog` if it does.
 
+### Debian/Ubuntu (.deb) and Fedora/openSUSE (.rpm)
+
+Each release also includes x86_64 Linux packages that install `/usr/bin/gamelog` (built on Ubuntu 22.04, so they need glibc 2.35 or newer). Download `gamelog_<version>-1_amd64.deb` or `gamelog-<version>-1.x86_64.rpm` from the [GitHub Releases](https://github.com/colorlesspilgrimage/gamelog/releases) page, optionally check it against its `.sha256` file, and install it with your package manager:
+
+```sh
+sudo apt install ./gamelog_0.1.0-1_amd64.deb      # Debian, Ubuntu
+sudo dnf install ./gamelog-0.1.0-1.x86_64.rpm     # Fedora (openSUSE: sudo zypper install …)
+```
+
+These aren't in any distribution's repositories, so updates mean downloading the new release's package.
+
 ### Arch Linux (AUR)
 
 A `PKGBUILD` lives in [`packaging/aur/`](packaging/aur/). It isn't published to the AUR yet, so build and install it locally with `makepkg` (this builds the tagged release from source, runs the tests, and installs `/usr/bin/gamelog`):
