@@ -1,15 +1,12 @@
 # Roadmap
 
-A running record of what's done and what's left, across both front ends.
-gamelog has two interfaces — a terminal UI (ratatui) and an optional desktop
-GUI (egui) — sharing the same `App` state machine and the same on-disk data
-(`~/.gamelog/entries.json`, `covers/`, `settings.toml`). Anything under
-"Core / shared" applies to both automatically, since it lives in `App`
-itself rather than either rendering layer.
+A running record of what's done and what's left. gamelog is a terminal UI
+(ratatui) on top of an `App` state machine and plain on-disk data
+(`~/.gamelog/entries.json`, `covers/`, `settings.toml`).
 
 ## Completed
 
-### Core / shared (used by both front ends)
+### Core
 
 - Entry model: title, system/platform, release date, status (*Want to
   Play* / *Playing* / *Played*), hours played, 0–5 star rating, cover art
@@ -64,62 +61,13 @@ itself rather than either rendering layer.
   with comments on first run; a live help bar reflects whatever's bound.
 - Session timer shown prominently in the footer while running.
 
-### GUI (egui/eframe, `--gui`)
-
-- Full feature parity with the TUI: browsing/filtering, entry CRUD,
-  sessions (with a live-counting button label), the first-run wizard, API
-  key entry, cover fetch fallback choices, and manual import via a native
-  file picker (`rfd`).
-- All dialogs are true modals (`egui::Modal`) that block background
-  interaction and are centered over the main window by default.
-- Keyboard focus management for text-input dialogs: auto-focuses the input
-  on open or when switching to a different kind of dialog, without
-  trapping Tab navigation to the buttons.
-- Cover art texture cache correctly invalidated after import, delete, and
-  any completed fetch (single or bulk) — fixed after initial release; see
-  commit `cafade8`.
-- Search box (with Clear), sort dropdown, and Reverse toggle in the list
-  panel, plus last played in the detail pane.
-- Import CSV... / Export CSV... toolbar buttons using native open/save
-  dialogs; the save dialog's own overwrite confirmation applies.
-- Native file dialogs (CSV and cover art Browse...) run on a background
-  thread, so the window keeps repainting while one is open instead of
-  being flagged "Application Not Responding" by the compositor.
-- Esc in normal mode closes the window like the TUI's quit (finalizing any
-  running play session first), except when it's closing an open dropdown
-  or leaving a focused text field. If finalizing the session fails to
-  save, a window-close request is cancelled so the error stays visible.
-
 ## Remaining
 
-### Core / shared
+### Core
 
 - **Design choice to revisit**: *last played* is only set by stopping a play
   session; editing hours by hand doesn't touch it, and there's no way to
   set it directly.
-
-### GUI
-
-- **Minor**: `draw_api_key_dialog`'s focus handling uses a simpler "focus if
-  nothing else is focused" check rather than the discriminant-tracking fix
-  applied to the general text-input dialog. In the rare case of two
-  consecutive `EnterApiKey` dialogs for different sources with no
-  intervening dialog, focus could theoretically land on the stale OK
-  button instead of the new field. Not reachable through normal app flow
-  today (mode transitions don't produce that sequence), so it's tracked
-  here rather than fixed proactively.
-- **Cosmetic**: after an action that ends a dialog mid-frame (e.g.
-  `commit_import_cover` flipping `mode` back to `Normal`), the modal
-  finishes rendering for that one frame before closing on the next.
-  Harmless, one-frame flicker at most.
-- **Housekeeping**: `GamelogApp::textures` isn't pruned of ids that no
-  longer exist in the library outside of a delete (which is now handled).
-  Not user-visible, since UUIDs aren't reused, but worth a periodic prune
-  if the cache's unbounded growth ever becomes a concern for very long
-  sessions.
-- No `keybindings.toml` equivalent — this is an intentional design
-  decision (see README's "GUI mode" section), not a gap: the GUI is
-  buttons-and-dialogs by design, so there's nothing to remap.
 
 ### Possible future milestones (not yet started, not committed to)
 
